@@ -55,7 +55,9 @@ def run(config):
     except (OSError, ValueError, KeyError) as exc:
         event("PLUGIN_FAILED", "failed", detail=str(exc)[:400])
         return 1
-    env = {**os.environ, "HOME": config["home"], "TMPDIR": config["tmp"]}
+    env = {**os.environ, "HOME": config["home"], "TMPDIR": config["tmp"], "SAL_USE_VCLPLUGIN": "svp"}
+    env.pop("DISPLAY", None)
+    env.pop("WAYLAND_DISPLAY", None)
     command = [config["soffice"], "--headless", "--nologo", "--nodefault", "--norestore",
                "-env:UserInstallation=" + Path(config["home"]).as_uri() + "/lo-profile",
                "--convert-to", "pdf:writer_pdf_Export", "--outdir", config["output"], config["input"]]

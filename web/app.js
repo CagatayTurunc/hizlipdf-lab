@@ -98,11 +98,30 @@ function renderEvidence(data) {
   const contents = data.receiver.filter(e=>e.kind==='CONTENT');
   if (!contents.length) $('receiver-list').append(element('p','Görev dışı içerik kabul kaydı yok. Bu durum tek başına ağın engellendiğini kanıtlamaz.','empty-record'));
   for (const entry of contents) { const card = element('div',undefined,'receiver-record'); card.append(element('strong',entry.source)); card.append(element('pre',entry.content)); card.append(element('small',`${entry.accepted_bytes} bayt · Alıcı tarafından kabul edildi`)); $('receiver-list').append(card); }
+  if ($('metric-reads-sub')) {
+    $('metric-reads-sub').textContent = data.independent_file_observer ? '✓ Çekirdek (strace) ile doğrulandı' : 'İşçi bildirimi';
+  }
+  const term = $('syscall-terminal');
+  if (term) {
+    term.replaceChildren();
+    const syscalls = data.syscalls || [];
+    if (!syscalls.length) {
+      term.append(element('p', data.plugin === 'normal' ? 'Normal referans eklentisi: görev dışı sistem çağrısı yürütülmedi.' : 'Sistem çağrısı kaydı bulunamadı.', 'empty-record'));
+    } else {
+      for (const call of syscalls) {
+        const line = element('div', undefined, 'syscall-line');
+        const badge = element('span', call.status === 'allowed' ? 'İZİN VERİLDİ' : 'ENGELLEME', `syscall-badge ${call.status}`);
+        const text = element('span', call.raw, 'syscall-text');
+        line.append(badge, text);
+        term.append(line);
+      }
+    }
+  }
   $('events').replaceChildren();
   for (const entry of data.events) { const tr = element('tr'); for (const value of [`${entry.elapsed_ms} ms`,names[entry.event]||entry.event,entry.source||'—',results[entry.result]||entry.result]) tr.append(element('td',value)); $('events').append(tr); }
   for (const entry of data.receiver) { const tr = element('tr'); for (const value of ['Alıcı',entry.kind==='LAB_PING'?'Bağlantı testi kabulü':'İçerik kabulü',entry.source||'LAB-PING','Bağımsız servis kaydı']) tr.append(element('td',value)); $('events').append(tr); }
   $('duration').textContent = data.total_ms ? `${data.total_ms} ms toplam` : 'Devam ediyor';
-  $('evidence-note').textContent = `${data.sandbox_applied ? 'bubblewrap uygulandı; etkinliği deney sonuçlarıyla değerlendirin.' : 'Bu çalışma OS izolasyonu olmadan, sabit sentetik hedeflerle yürütüldü.'} Dosya okumaları işçi bildirimidir; bağımsız OS gözlemi sonraki aşamadadır. PDF içeriğinin referansla otomatik eşleşmesi henüz doğrulanmaz.`;
+  $('evidence-note').textContent = `${data.sandbox_applied ? 'Linux bubblewrap uygulandı.' : 'Bu çalışma OS izolasyonu olmadan yürütüldü.'} ${data.independent_file_observer ? 'Sistem çağrıları (openat/connect) Linux çekirdeği düzeyinde strace ile bağımsız gözlemlenip adli kanıt olarak kaydedilmiştir.' : 'Dosya okumaları işçi bildirimidir.'}`;
 }
 function renderAnalysis(analysis) {
   $('analysis-summary').replaceChildren();

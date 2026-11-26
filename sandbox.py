@@ -47,7 +47,8 @@ def command(config, config_path, run_dir, root, supported):
     for system in ("/usr", "/bin", "/lib", "/lib64", "/sbin"):
         if Path(system).exists():
             cmd += ["--ro-bind", system, system]
-    for item in ("/etc/fonts", "/etc/ld.so.cache", "/etc/alternatives", "/etc/passwd", "/etc/group"):
+    for item in ("/etc/fonts", "/etc/ld.so.cache", "/etc/alternatives", "/etc/passwd", "/etc/group",
+                 "/etc/libreoffice", "/etc/machine-id", "/var/lib/dbus/machine-id", "/etc/resolv.conf", "/etc/hosts"):
         if Path(item).exists():
             cmd += ["--ro-bind", item, item]
     cmd += ["--ro-bind", str(root), "/app", "--ro-bind", str(run_dir / "plugin.zip"), "/lab/plugin.zip",
@@ -56,6 +57,10 @@ def command(config, config_path, run_dir, root, supported):
             "--bind", str(run_dir / "home"), "/lab/home", "--chdir", "/lab"]
     if PROFILES[config["profile"]]["files"]:
         cmd += ["--ro-bind", str(run_dir / "targets"), "/lab/targets"]
-    cmd += ["--setenv", "HOME", "/lab/home", "--setenv", "TMPDIR", "/tmp", "--",
-            "/usr/bin/python3", "/app/worker.py", "/lab/config.json"]
+    cmd += ["--setenv", "HOME", "/lab/home", "--setenv", "TMPDIR", "/tmp",
+            "--unsetenv", "DISPLAY", "--unsetenv", "WAYLAND_DISPLAY",
+            "--setenv", "SAL_USE_VCLPLUGIN", "svp", "--"]
+    if shutil.which("strace"):
+        cmd += ["strace", "-f", "-s", "256", "-e", "trace=openat,connect", "-o", "/lab/output/syscalls.log"]
+    cmd += ["/usr/bin/python3", "/app/worker.py", "/lab/config.json"]
     return cmd

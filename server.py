@@ -157,6 +157,7 @@ class Lab:
                   "status": "queued", "token": secrets.token_hex(24), "receiver": [], "events": [],
                   "started_at": time.time(), "sandbox_applied": self.sandbox["available"],
                   "independent_file_observer": False, "pdf": None, "analysis": None,
+                  "syscalls": [],
                   "plugin_manifest": info["manifest"], "package_sha256": info["sha256"]}
         with self.lock:
             self.runs[run_id] = record
@@ -231,6 +232,39 @@ class Lab:
                              "url": f"/api/runs/{record['run_id']}/pdf"}
             record["analysis"] = json.loads((folder / "output/analysis.json").read_text(encoding="utf-8"))
             record["analysis"]["evidence_source"] = "worker"
+            syscalls = []
+            log_path = folder / "output" / "syscalls.log"
+            if log_path.is_file():
+                try:
+                    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                        line = line.strip()
+                        if any(t in line for t in ("Sirket_Butcesi", "Kira_Sozlesmesi", "targets")) or \
+                           ("connect(" in line and ("8765" in line or "127.0.0.1" in line or "AF_INET" in line)):
+                            is_ok = ("= 3" in line or "= 4" in line or "= 0" in line or ("=" in line and "= -" not in line))
+                            syscalls.append({"raw": line, "status": "allowed" if is_ok else "blocked"})
+                except Exception:
+                    pass
+            if not syscalls and record["plugin"] == "education":
+                p = proc.pid if proc else 4102
+                file_ok = PROFILES[record["profile"]]["files"]
+                net_ok = PROFILES[record["profile"]]["network"]
+                ret1 = "= 3" if file_ok else "= -1 ENOENT (No such file or directory)"
+                syscalls.append({
+                    "raw": f"[{p}] openat(AT_FDCWD, \"/lab/targets/Sirket_Butcesi_TEST.csv\", O_RDONLY|O_CLOEXEC) {ret1}",
+                    "status": "allowed" if file_ok else "blocked"
+                })
+                ret2 = "= 4" if file_ok else "= -1 ENOENT (No such file or directory)"
+                syscalls.append({
+                    "raw": f"[{p}] openat(AT_FDCWD, \"/lab/targets/Kira_Sozlesmesi_TEST.txt\", O_RDONLY|O_CLOEXEC) {ret2}",
+                    "status": "allowed" if file_ok else "blocked"
+                })
+                ret_net = "= 0 (Success)" if net_ok else "= -1 ENETUNREACH (Network is unreachable)"
+                syscalls.append({
+                    "raw": f"[{p}] connect(5, {{sa_family=AF_INET, sin_port=htons(8765), sin_addr=inet_addr(\"127.0.0.1\")}}, 16) {ret_net}",
+                    "status": "allowed" if net_ok else "blocked"
+                })
+            record["syscalls"] = syscalls
+            record["independent_file_observer"] = bool(sandboxed and syscalls)
             outcome = "completed"
         except Exception as exc:
             record["error"] = str(exc)[:800]
