@@ -157,7 +157,7 @@ class Lab:
                   "status": "queued", "token": secrets.token_hex(24), "receiver": [], "events": [],
                   "started_at": time.time(), "sandbox_applied": self.sandbox["available"],
                   "independent_file_observer": False, "pdf": None, "analysis": None,
-                  "syscalls": [],
+                  "syscalls": [], "mitre_matrix": [],
                   "plugin_manifest": info["manifest"], "package_sha256": info["sha256"]}
         with self.lock:
             self.runs[run_id] = record
@@ -265,6 +265,48 @@ class Lab:
                 })
             record["syscalls"] = syscalls
             record["independent_file_observer"] = bool(sandboxed and syscalls)
+            file_ok = PROFILES[record["profile"]]["files"]
+            net_ok = PROFILES[record["profile"]]["network"]
+            is_edu = record["plugin"] == "education"
+            exfil_count = len([e for e in record["receiver"] if e.get("kind") == "CONTENT"])
+            record["mitre_matrix"] = [
+                {
+                    "technique_id": "T1204.002",
+                    "tactic": "Execution (TA0002)",
+                    "name": "User Execution: Malicious File",
+                    "detail": "Kullanıcı DOCX belgesi yüklediğinde analiz işlevi adı altında eklenti kodu tetiklendi.",
+                    "status": "violated",
+                    "status_label": "TETİKLENDİ",
+                    "mitigation": "Uygulama İçi İnceleme"
+                },
+                {
+                    "technique_id": "T1059.006",
+                    "tactic": "Execution (TA0002)",
+                    "name": "Command & Scripting Interpreter: Python",
+                    "detail": "İşçi süreci sistem Python yorumlayıcısı ile bağımsız sandbox namespace'inde koşturuldu.",
+                    "status": "violated",
+                    "status_label": "ÇALIŞTIRILDI",
+                    "mitigation": "Unshare PID/IPC/UTS"
+                },
+                {
+                    "technique_id": "T1005",
+                    "tactic": "Collection (TA0009)",
+                    "name": "Data from Local System",
+                    "detail": "Görev dışı şirket bütçesi ve kira sözleşmesi sentetik dosyalarına erişim denemesi." if is_edu else "Normal eklenti: Görev dışı yerel dosyalara erişim denemesi yapılmadı.",
+                    "status": "violated" if (is_edu and file_ok) else "blocked",
+                    "status_label": ("İHLAL EDİLDİ" if file_ok else "ENGELLENDİ") if is_edu else "GÖZLEMLENMEDİ",
+                    "mitigation": "Bubblewrap Mount Namespace (B & D)" if not file_ok else "Yetki Denetimi Yok (A & C)"
+                },
+                {
+                    "technique_id": "T1041",
+                    "tactic": "Exfiltration (TA0010)",
+                    "name": "Exfiltration Over C2 Channel",
+                    "detail": "Toplanan sentetik verilerin yerel HTTP alıcı servisine (127.0.0.1:8765/collect) sızdırılma girişimi." if is_edu else "Normal eklenti: Komuta kontrol veri aktarımı denenmedi.",
+                    "status": "violated" if (is_edu and net_ok and exfil_count > 0) else ("blocked" if (is_edu and not net_ok) else "neutral"),
+                    "status_label": ("İHLAL EDİLDİ" if (net_ok and exfil_count > 0) else ("AĞ AÇIK / VERİ YOK" if net_ok else "ENGELLENDİ")) if is_edu else "GÖZLEMLENMEDİ",
+                    "mitigation": "Bubblewrap --unshare-net Namespace (C & D)" if not net_ok else "Ağ İletişimi Serbest (A & B)"
+                }
+            ]
             outcome = "completed"
         except Exception as exc:
             record["error"] = str(exc)[:800]

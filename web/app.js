@@ -101,6 +101,30 @@ function renderEvidence(data) {
   if ($('metric-reads-sub')) {
     $('metric-reads-sub').textContent = data.independent_file_observer ? '✓ Çekirdek (strace) ile doğrulandı' : 'İşçi bildirimi';
   }
+  const mitreGrid = $('mitre-grid');
+  if (mitreGrid) {
+    mitreGrid.replaceChildren();
+    const mitreList = data.mitre_matrix || [];
+    if (!mitreList.length) {
+      mitreGrid.append(element('p', 'MITRE ATT&CK eşleme kaydı bulunamadı.', 'empty-record'));
+    } else {
+      for (const item of mitreList) {
+        const itemCard = element('div', undefined, `mitre-card-item status-${item.status}`);
+        const header = element('div', undefined, 'mitre-item-header');
+        const codePill = element('span', item.technique_id, 'mitre-id-pill');
+        const statusBadge = element('span', item.status_label, `mitre-status-badge ${item.status}`);
+        header.append(codePill, statusBadge);
+        const title = element('h3', item.name, 'mitre-technique-title');
+        const tactic = element('div', item.tactic, 'mitre-tactic-label');
+        const desc = element('p', item.detail, 'mitre-detail-text');
+        itemCard.append(header, title, tactic, desc);
+        if (item.mitigation) {
+          itemCard.append(element('div', `Savunma: ${item.mitigation}`, 'mitre-mitigation-tag'));
+        }
+        mitreGrid.append(itemCard);
+      }
+    }
+  }
   const term = $('syscall-terminal');
   if (term) {
     term.replaceChildren();
