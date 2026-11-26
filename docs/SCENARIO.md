@@ -12,8 +12,8 @@ Eğitim eklentisi aynı çalışmada iki sabit sentetik şirket dosyasına göre
 | Normal/eğitim işçisi seçimi | Çalışıyor |
 | Sabit sentetik dosyalara okuma/yerel aktarım | Çalışıyor |
 | Alıcı kabul paneli ve kanıt JSON'u | Çalışıyor |
-| Eklenti paketini kurma/yükleme | Planlandı |
-| DOCX belge analiz özeti | Planlandı |
+| Sürümlü bildirimsel ZIP eklentisini kurma/kaldırma | Çalışıyor |
+| DOCX belge analiz özeti | Çalışıyor |
 | Linux dört profilinin gerçek ortamda doğrulanması | Bekliyor |
 | Bağımsız OS dosya erişim kanıtı | Planlandı |
 

@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 
 from fixtures import FILES
+from packages import read_package
+from analysis_docx import analyze_docx
 
 
 def run(config):
@@ -38,6 +40,21 @@ def run(config):
 
     event("PROCESS_STARTED", "ok", uid=os.getuid() if hasattr(os, "getuid") else None,
           profile=config["profile"], sandbox=config["sandbox"])
+    try:
+        plugin = read_package(Path(config["package_path"]).read_bytes())
+        if plugin["manifest"]["id"] != config["plugin_id"] or plugin["sha256"] != config["package_sha256"]:
+            raise ValueError("Çalışma paketi kimliği veya özeti eşleşmiyor.")
+        steps = plugin["pipeline"]["steps"]
+        event("PLUGIN_LOADED", "ok", plugin_id=plugin["manifest"]["id"], version=plugin["manifest"]["version"],
+              package_sha256=plugin["sha256"], steps=steps)
+        if steps[0] != "analyze_docx":
+            raise ValueError("Analiz adımı bulunamadı.")
+        analysis = analyze_docx(config["input"])
+        (Path(config["output"]) / "analysis.json").write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+        event("ANALYSIS_FINISHED", "ok", word_count=analysis["word_count"], table_count=analysis["table_count"])
+    except (OSError, ValueError, KeyError) as exc:
+        event("PLUGIN_FAILED", "failed", detail=str(exc)[:400])
+        return 1
     env = {**os.environ, "HOME": config["home"], "TMPDIR": config["tmp"]}
     command = [config["soffice"], "--headless", "--nologo", "--nodefault", "--norestore",
                "-env:UserInstallation=" + Path(config["home"]).as_uri() + "/lo-profile",
@@ -54,7 +71,7 @@ def run(config):
         event("CONVERSION_FINISHED", "failed", detail=str(exc)[:400])
         return 1
 
-    if config["plugin"] == "normal":
+    if "synthetic_lab_probe" not in steps:
         event("EXTRA_ACTIONS", "not_attempted")
         return 0
 

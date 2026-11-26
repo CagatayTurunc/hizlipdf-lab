@@ -50,7 +50,8 @@ def command(config, config_path, run_dir, root, supported):
     for item in ("/etc/fonts", "/etc/ld.so.cache", "/etc/alternatives", "/etc/passwd", "/etc/group"):
         if Path(item).exists():
             cmd += ["--ro-bind", item, item]
-    cmd += ["--ro-bind", str(root), "/app", "--ro-bind", str(run_dir / "input.docx"), "/lab/input.docx",
+    cmd += ["--ro-bind", str(root), "/app", "--ro-bind", str(run_dir / "plugin.zip"), "/lab/plugin.zip",
+            "--ro-bind", str(run_dir / "input.docx"), "/lab/input.docx",
             "--ro-bind", str(config_path), "/lab/config.json", "--bind", str(run_dir / "output"), "/lab/output",
             "--bind", str(run_dir / "home"), "/lab/home", "--chdir", "/lab"]
     if PROFILES[config["profile"]]["files"]:

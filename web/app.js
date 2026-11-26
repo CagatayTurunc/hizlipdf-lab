@@ -1,16 +1,20 @@
 const $ = (id) => document.getElementById(id);
-let file = null, health = null, currentRun = null, busy = false;
+let file = null, health = null, currentRun = null, busy = false, plugins = [], pluginBusy = false;
 const names = {PROCESS_STARTED:'İşçi başladı',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Bağımsız bağlantı testi',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
 const results = {ok:'Başarılı (işçi)',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
 
-function view(observer) {
-  $('user-view').hidden = observer; $('observer-view').hidden = !observer;
-  $('user-tab').classList.toggle('active', !observer); $('observer-tab').classList.toggle('active', observer);
+Object.assign(names,{PLUGIN_LOADED:'Kurulu paket yüklendi',PLUGIN_FAILED:'Paket yüklenemedi',ANALYSIS_FINISHED:'Belge analiz edildi'});
+function view(name) {
+  for (const key of ['user','plugins','observer']) {
+    $(key+'-view').hidden = key !== name; $(key+'-tab').classList.toggle('active',key === name);
+  }
 }
-$('user-tab').onclick = () => view(false);
-$('observer-tab').onclick = $('reveal-button').onclick = () => view(true);
+$('user-tab').onclick = () => view('user');
+$('plugins-tab').onclick = $('manage-plugins').onclick = () => view('plugins');
+$('observer-tab').onclick = $('reveal-button').onclick = () => view('observer');
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
-function refreshButton() { $('convert-button').disabled = busy || !file || !health?.converter; }
+function refreshButton() { $('convert-button').disabled = busy || !file || !health?.converter || !$('plugin').value; }
+$('plugin').onchange = refreshButton;
 function selectFile(next) {
   if (busy) return;
   error('');
@@ -42,6 +46,7 @@ async function init() {
     for (const profile of health.profiles) { const option = document.createElement('option'); option.value = profile.id; option.textContent = `${profile.id} · ${profile.name}${profile.available ? '' : ' (Linux gerekli)'}`; option.disabled = !profile.available; $('profile').append(option); }
     $('environment').textContent = `${health.system} · ${health.sandbox.reason}`;
     if (!health.converter) error('LibreOffice bulunamadı. Kurulum açıklamasını izleyin.');
+    await refreshPlugins();
     refreshButton();
   } catch (e) { error('Uygulama servisine ulaşılamadı: ' + e.message); }
 }
@@ -53,7 +58,7 @@ $('convert-button').onclick = async () => {
   $('output-empty').hidden = false; $('output-ready').hidden = true; $('pdf-preview').removeAttribute('src');
   $('conversion-status').textContent = 'Belge hazırlanıyor…';
   try {
-    const payload = {filename:file.name,content_base64:await base64File(file),profile:$('profile').value,plugin:$('plugin').value};
+    const payload = {filename:file.name,content_base64:await base64File(file),profile:$('profile').value,plugin_id:$('plugin').value};
     const created = await json('/api/runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     currentRun = created.run_id; let data;
     const deadline = Date.now() + 95000;
@@ -69,6 +74,7 @@ $('convert-button').onclick = async () => {
     $('pdf-details').textContent = `${data.pdf.pages} sayfa · ${(data.pdf.bytes/1024).toFixed(1)} KiB · ${(data.total_ms/1000).toFixed(2)} sn toplam`;
     $('pdf-preview').src = data.pdf.url;
     $('download').href = data.pdf.url; $('download').download = file.name.replace(/\.docx$/i,'.pdf');
+    renderAnalysis(data.analysis);
     $('conversion-status').textContent = 'PDF hazır. Önizleyebilir ve indirebilirsiniz.';
   } catch(e) { error(e.message); $('conversion-status').textContent = 'İşlem tamamlanamadı.'; }
   finally { busy = false; document.body.classList.remove('busy'); $('sample-button').disabled = $('plugin').disabled = $('profile').disabled = $('file-input').disabled = false; refreshButton(); }
@@ -76,7 +82,7 @@ $('convert-button').onclick = async () => {
 function element(tag, text, cls) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; }
 function renderEvidence(data) {
   $('no-run').hidden = true; $('evidence-view').hidden = false;
-  $('run-id').textContent = data.run_id; $('run-profile').textContent = `Profil ${data.profile} · ${data.plugin === 'normal' ? 'Normal referans' : 'Eğitim eklentisi'}`;
+  $('run-id').textContent = data.run_id; $('run-profile').textContent = `Profil ${data.profile} · ${data.plugin_manifest?.name || data.plugin} · v${data.plugin_manifest?.version || '0.1'}`;
   $('evidence-download').href = `/api/runs/${data.run_id}/evidence`;
   $('metric-pdf').textContent = data.pdf ? 'Hazır' : data.status === 'failed' ? 'Hata' : 'İşleniyor';
   $('metric-reads').textContent = data.metrics?.read_sources_worker_reported ?? '—';
@@ -98,4 +104,53 @@ function renderEvidence(data) {
   $('duration').textContent = data.total_ms ? `${data.total_ms} ms toplam` : 'Devam ediyor';
   $('evidence-note').textContent = `${data.sandbox_applied ? 'bubblewrap uygulandı; etkinliği deney sonuçlarıyla değerlendirin.' : 'Bu çalışma OS izolasyonu olmadan, sabit sentetik hedeflerle yürütüldü.'} Dosya okumaları işçi bildirimidir; bağımsız OS gözlemi sonraki aşamadadır. PDF içeriğinin referansla otomatik eşleşmesi henüz doğrulanmaz.`;
 }
+function renderAnalysis(analysis) {
+  $('analysis-summary').replaceChildren();
+  if (!analysis) return;
+  $('analysis-summary').append(element('h3','Belge analizi'));
+  $('analysis-summary').append(element('p',`${analysis.word_count} kelime/sayı grubu · ${analysis.table_count} tablo · ${analysis.heading_count} başlık · ${analysis.paragraph_count} dolu paragraf`));
+  const list = element('ul'); for (const title of analysis.headings) list.append(element('li',title));
+  $('analysis-summary').append(list,element('p',analysis.scope+' '+analysis.word_method,'small-note'));
+}
+async function refreshPlugins() {
+  const previous = $('plugin').value;
+  plugins = (await json('/api/plugins')).plugins;
+  $('plugin').replaceChildren();
+  for (const plugin of plugins.filter(p=>p.installed)) {
+    const option=element('option',`${plugin.name} · v${plugin.version}`); option.value=plugin.id; $('plugin').append(option);
+  }
+  if (!plugins.some(p=>p.installed)) { const option=element('option','Önce bir eklenti kurun'); option.value=''; $('plugin').append(option); }
+  if (plugins.some(p=>p.installed && p.id===previous)) $('plugin').value=previous;
+  $('plugin-cards').replaceChildren();
+  for (const plugin of plugins) {
+    const card=element('section',undefined,'card plugin-card');
+    card.append(element('div',plugin.installed ? '● KURULU' : '○ KURULU DEĞİL',plugin.installed?'ping':'muted'),element('h2',plugin.name));
+    card.append(element('p',`${plugin.id} · v${plugin.version}`,'small-note'));
+    card.append(element('p',plugin.variant==='education' ? 'Analiz ve PDF dönüşümü; ek olarak iki sabit sentetik dosyada okuma ve yerel aktarım deneyi.' : 'Belge analizi ve PDF dönüşümü. Görev dışı erişim veya aktarım denemesi yapmaz.'));
+    if(plugin.error) card.append(element('p',plugin.error,'error'));
+    if(plugin.sha256) card.append(element('code','SHA-256: '+plugin.sha256,'package-hash'));
+    const actions=element('div',undefined,'plugin-actions'); const link=element('a','Paketi indir'); link.href=plugin.download_url; link.className='text-link'; actions.append(link);
+    const button=element('button',plugin.installed ? 'Eklentiyi kaldır' : 'Paketi kur','secondary'); button.disabled=pluginBusy;
+    button.onclick=()=>pluginAction(async()=>{
+      if(plugin.installed) await json('/api/plugins/uninstall',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:plugin.id})});
+      else { const response=await fetch(plugin.download_url); if(!response.ok) throw Error('Paket indirilemedi.'); await installBlob(new File([await response.blob()],plugin.id+'.zip')); }
+      return plugin.installed ? 'Eklenti kaldırıldı. Mevcut çalışma kopyası etkilenmez.' : 'Paket doğrulandı ve kuruldu. Belge dönüştür ekranından kullanabilirsiniz.';
+    }); actions.append(button); card.append(actions); $('plugin-cards').append(card);
+  }
+  refreshButton();
+}
+async function installBlob(selected) {
+  if(!selected || !selected.name.toLowerCase().endsWith('.zip') || selected.size>32768) throw Error('En fazla 32 KiB boyutunda bir laboratuvar ZIP paketi seçin.');
+  await json('/api/plugins/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({package_base64:await base64File(selected)})});
+}
+async function pluginAction(action) {
+  if(pluginBusy) return;
+  pluginBusy=true; $('plugin-error').hidden=true; $('plugin-status').textContent=''; $('plugin-upload-button').disabled=true;
+  for(const button of $('plugin-cards').querySelectorAll('button')) button.disabled=true;
+  try { $('plugin-status').textContent=await action(); }
+  catch(e) { $('plugin-error').textContent=e.message; $('plugin-error').hidden=false; }
+  finally { pluginBusy=false; $('plugin-upload-button').disabled=false; await refreshPlugins().catch(e=>error(e.message)); }
+}
+$('plugin-upload-button').onclick=()=>$('plugin-file').click();
+$('plugin-file').onchange=(event)=>{ const selected=event.target.files[0]; if(selected) pluginAction(async()=>{await installBlob(selected); return 'Seçilen paket doğrulandı ve kuruldu.';}); event.target.value=''; };
 init();

@@ -7,11 +7,23 @@
     <div class="workspace"><span class="avatar">M</span><div>MaviRota Danışmanlık<small>Belge çalışma alanı</small></div></div>
     <div class="nav-label">ÇALIŞMA ALANI</div>
     <button class="nav active" id="user-tab"><span>▤</span> Belge dönüştür</button>
+    <button class="nav" id="plugins-tab"><span>◈</span> Eklentiler</button>
     <button class="nav" id="observer-tab"><span>◉</span> Deney gözlemcisi</button>
     <div class="sidebar-bottom"><span class="status-dot"></span> Yerel eğitim laboratuvarı<p>Yalnızca sentetik veriler.<br>Gerçek dönüşüm, görünür kanıt.</p></div>
   </aside>
   <main>
     <header><div class="breadcrumb">MaviRota <span>/</span> Belge araçları</div><div class="local-badge">● LOCALHOST</div></header>
+    <section class="view" id="plugins-view" hidden>
+      <div class="eyebrow">RAPORLAB / EKLENTİ YÖNETİMİ</div>
+      <h1>Belge araçlarınızı<br><span>paket kurarak genişletin.</span></h1>
+      <p class="intro">Eklenti paketini indirin veya aşağıdaki kur düğmesini kullanın.<br>Yalnızca bu laboratuvar için hazırlanan iki paket kabul edilir.</p>
+      <section class="card plugin-upload"><div><h2>Elinizde bir eklenti paketi mi var?</h2><p class="small-note">ZIP paketini seçin; kimlik, sürüm ve işlem planı doğrulanarak kurulsun.</p></div><button class="secondary" id="plugin-upload-button">ZIP paketi seç ve kur</button><input type="file" id="plugin-file" accept=".zip" hidden></section>
+      <div id="plugin-error" class="error" role="alert" hidden></div>
+      <p id="plugin-status" role="status" aria-live="polite" class="small-note"></p>
+      <div id="plugin-cards" class="plugin-cards"></div>
+      <div class="insight"><span>◈</span><div><strong>Belge seçimi ve süreç yetkisi farklıdır.</strong><p>Seçilen belge, kullanıcının verdiği görevdir. Eklentinin diğer dosyalara ve ağa erişimi ise Linux çalışma profiline bağlıdır. Paketin kurulması bu yetkileri otomatik olarak daraltmaz.</p></div></div>
+      <p class="small-note">Paketler manifest ve bildirimsel işlem planı taşır. Keyfi Python/JavaScript kodu kurma desteklenmez. Kurulu paketler sunucu yeniden başlatıldığında korunur.</p>
+    </section>
     <section class="view" id="user-view">
       <div class="eyebrow">BELGENİZ, BİR ADIM SONRA.</div>
       <h1>DOCX’ten PDF’ye.<br><span>İşiniz kaldığı yerden devam etsin.</span></h1>
@@ -23,7 +35,8 @@
           <input type="file" id="file-input" accept=".docx" hidden>
           <button class="sample" id="sample-button">↳ Sentetik örnek belgeyi kullan</button>
           <div class="divider"></div>
-          <div class="field-grid"><label>Eklenti<select id="plugin"><option value="education">HızlıPDF · Eğitim eklentisi</option><option value="normal">HızlıPDF · Normal referans</option></select></label><label>Çalışma profili<select id="profile"><option value="A">A · Geniş laboratuvar yetkisi</option></select></label></div>
+          <div class="field-grid"><label>Kurulu eklenti<select id="plugin"><option value="">Önce bir eklenti kurun</option></select></label><label>Çalışma profili<select id="profile"><option value="A">A · Geniş laboratuvar yetkisi</option></select></label></div>
+          <button class="sample" id="manage-plugins">Eklentileri yönet →</button>
           <p class="environment" id="environment">Çalışma ortamı kontrol ediliyor…</p>
           <button class="primary" id="convert-button" disabled>PDF’ye dönüştür <span>→</span></button>
           <div id="conversion-status" role="status" aria-live="polite" class="conversion-status">Başlamak için bir DOCX seçin.</div>
@@ -31,7 +44,7 @@
         </section>
         <section class="card output-card"><div class="card-top"><h2>PDF çıktısı</h2><span class="muted">02 / SONUÇ</span></div>
           <div id="output-empty" class="output-empty"><div class="pdf-outline">PDF</div><h3>Yeni belgeniz burada görünecek.</h3><p>Dönüşüm tamamlanınca önizleyebilir<br>ve PDF’nizi indirebilirsiniz.</p></div>
-          <div id="output-ready" hidden><div class="success-tag">✓ PDF yapısal doğrulamayı geçti</div><div class="pdf-details" id="pdf-details"></div><iframe id="pdf-preview" title="Dönüştürülen PDF önizlemesi"></iframe><a class="primary download" id="download" download="Musteri_Teklifi.pdf">PDF’yi indir ↓</a><p class="small-note">İçerik ve sayfa düzenini önizlemeden kontrol edin.</p></div>
+          <div id="output-ready" hidden><div class="success-tag">✓ PDF yapısal doğrulamayı geçti</div><div class="pdf-details" id="pdf-details"></div><iframe id="pdf-preview" title="Dönüştürülen PDF önizlemesi"></iframe><a class="primary download" id="download" download="Musteri_Teklifi.pdf">PDF’yi indir ↓</a><div id="analysis-summary" class="analysis-summary"></div><p class="small-note">İçerik ve sayfa düzenini önizlemeden kontrol edin.</p></div>
         </section>
       </div>
       <div class="insight"><span>◈</span><div><strong>Doğru çıktı, hikâyenin tamamı mı?</strong><p>Dönüşümden sonra Deney gözlemcisi’nde eklentinin ek erişimlerini inceleyin.</p></div><button id="reveal-button">Arka plana bak →</button></div>
@@ -48,6 +61,6 @@
         <div class="lab-note" id="evidence-note"></div>
       </div>
     </section>
-    <footer>HızlıPDF / MaviRota <span>Kontrollü siber güvenlik simülasyonu · v0.1</span></footer>
+    <footer>HızlıPDF / RaporLab · MaviRota <span>Kontrollü siber güvenlik simülasyonu · v0.2</span></footer>
   </main>
 </body></html>

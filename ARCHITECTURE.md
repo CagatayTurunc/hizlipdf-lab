@@ -1,4 +1,4 @@
-# Mimari kararı · v0.1
+# Mimari kararı · v0.2
 
 ## Amaç ve sınır
 
@@ -25,6 +25,8 @@ flowchart LR
 |---|---|
 | `server.py` | HTTP API, DOCX doğrulama, çalışma kimliği, alıcı, PDF yapısal kontrolü |
 | `worker.py` | Gerçek dönüşüm ve sınırlandırılmış eğitim davranışı |
+| `packages.py` | Sürümlü ZIP kataloğu, içerik doğrulama, kalıcı kurulum ve kaldırma |
+| `analysis_docx.py` | DOCX gövdesindeki paragraf, tablo, başlık ve kelime/sayı analizi |
 | `sandbox.py` | Ortam yeteneği ve dört gerçek Linux çalıştırma profili |
 | `fixtures.py` | Kabul edilebilecek iki sentetik içeriğin tek kaynağı |
 | `web/` | Derleme gerektirmeyen Türkçe arayüz ve gözlem paneli |
@@ -47,7 +49,11 @@ Bu ilk sandbox, minimal Linux laboratuvarı için hazırlanmıştır. Sistem `/u
 
 - `GET /api/health`: motor ve gerçek izolasyon desteği.
 - `GET /api/sample`: sentetik DOCX.
-- `POST /api/runs`: `{filename, content_base64, plugin: normal|education, profile: A|B|C|D}`; `202 {run_id}` döner.
+- `GET /api/plugins`: katalog, kurulum durumu ve kurulu paketin SHA-256 özeti.
+- `GET /api/plugins/<plugin_id>/package`: sabit laboratuvar ZIP paketini indirir.
+- `POST /api/plugins/install`: `{package_base64}`; paketi doğrular ve kurar.
+- `POST /api/plugins/uninstall`: `{plugin_id}`; yeni işler için paketi kaldırır.
+- `POST /api/runs`: `{filename, content_base64, plugin_id, profile: A|B|C|D}`; yalnızca kurulu paketle `202 {run_id}` döner. Eski `plugin: normal|education` alanı da kurulum zorunluluğuyla desteklenir.
 - `GET /api/runs/<id>`: durum, işçi olayları, alıcı kayıtları, PDF ve metrikler.
 - `GET /api/runs/<id>/pdf`: tamamlanmış çıktıyı gösterir/indirir.
 - `GET /api/runs/<id>/evidence`: per-run gizli anahtar olmadan JSON kanıtı.
@@ -62,4 +68,10 @@ Durumlar: `queued → running → completed|failed`. Aynı anda en fazla iki iş
 4. Uygulama PDF'yi yeniden açar; sayfa sayısı ve metin alıntısını üretir. Yapısal geçerlilik ile içerik eşitliği ayrı tutulur.
 5. Tarayıcıya gönderilen bütün değişken metinler `textContent` ile işlenir; yerel servis Host/Origin kontrolü yapar ve dış arayüzde dinlemez.
 
-Receiver, işçiden bağımsızdır fakat uygulama servisiyle aynı güven sınırındadır. Ayrı makine alıcısı ve bağımsız OS denetimi v0.2/v0.3 kapsamıdır. Kısıt yokken yapay olarak “engellendi” sonucu üretilmez. Çevresel hata ile güvenlik politikası aynı şey değildir.
+Receiver, işçiden bağımsızdır fakat uygulama servisiyle aynı güven sınırındadır. Ayrı makine alıcısı ve bağımsız OS denetimi sonraki Linux/gözlem aşamalarının kapsamıdır. Kısıt yokken yapay olarak “engellendi” sonucu üretilmez. Çevresel hata ile güvenlik politikası aynı şey değildir.
+
+## Eklenti yükleme sınırı
+
+Paket iki JSON dosyasından oluşur. Uygulama yalnızca iki bilinen kimlik/sürüm/işlem planını kabul eder; arşivi dosya sistemine açmaz. Kurulum atomik dosya değişimiyle yapılır. İş başlatılırken paket belleğe alınır ve o çalışmanın `plugin.zip` kopyasına yazılır. İşçi, kopyayı yeniden doğrular; kimlik ve SHA-256 eşleşmesini kontrol eder. Linux'ta bu kopya salt okunur bağlanır. Kaldırma sonraki işleri etkiler; başlamış işin kopyasını silmez.
+
+Bu, işletim sistemi izinlerini genişleten bir kurulum değildir. Paket içindeki plan yalnızca uygulamanın tanımladığı `analyze_docx`, `convert_pdf`, `synthetic_lab_probe` adımlarını kullanabilir. SHA-256 bütünlük kanıtıdır, yayıncı imzası değildir. İşçi tarafından üretilen analiz bağımsız OS kanıtı olarak gösterilmez. Başlık/kelime sayımının kapsamı sonuçta açıkça belirtilir.

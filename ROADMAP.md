@@ -12,17 +12,17 @@
 
 Kabul: Normal sürüm doğru PDF üretir ve aktarım yapmaz. Eğitim A sürümü aynı içeriği koruyan PDF üretir; alıcı iki sentetik kaydı gerçekten kabul eder.
 
-## Eklenti ürünü · Linux aşamasıyla birlikte sıradaki iş
+## Eklenti ürünü · v0.2 tamamlandı
 
-- [ ] RaporLab ana uygulaması içinde kurulu eklentiler ekranı.
-- [ ] Laboratuvarda hazırlanan sabit eklenti paketi için manifest ve kurulum/kaldırma akışı.
-- [ ] Paket kimliği ve sürümüyle doğru normal/eğitim işçisinin yüklenmesi.
-- [ ] Seçilen DOCX için başlıklar, kelime ve tablo sayısını içeren analiz özeti.
-- [ ] Paket kurmak ile belge seçmek arasındaki yetki farkının panelde açıklanması.
+- [x] RaporLab ana uygulaması içinde kurulu eklentiler ekranı.
+- [x] Laboratuvarda hazırlanan sabit eklenti paketi için manifest ve kurulum/kaldırma akışı.
+- [x] Paket kimliği ve sürümüyle doğru normal/eğitim işlem planının işçide yüklenmesi.
+- [x] Seçilen DOCX için başlıklar, kelime ve tablo sayısını içeren analiz özeti.
+- [x] Paket kurmak ile belge seçmek arasındaki yetki farkının panelde açıklanması.
 
-Mevcut seçim kutusu gerçek paket kurulumunun tamamlandığı anlamına gelmez. Paket formatı, içerik doğrulaması ve işçi arayüzü uygulanıp test edilmeden bu adım tamamlanmış sayılmaz.
+Kabul doğrulandı: yeni kurulumda eklenti yok; gerçek ZIP doğrulanıp kalıcı olarak kurulur; işçi manifest ve işlem planını çalışma kopyasından yükler. Kaldırılan paket yeni çalışmada kullanılamaz, başlamış iş kendi kopyasıyla tamamlanır. Paketler bildirimsel plan taşır; keyfi kod yükleyici değildir. Ayrıntılar `docs/PLUGIN_PACKAGES.md` içindedir.
 
-## Aşama 2 · Linux deney ortamı (v0.2)
+## Aşama 2 · Linux deney ortamı (v0.3, sıradaki iş)
 
 1. Temiz Linux VM, normal kullanıcı, sistem Python'u, LibreOffice ve bubblewrap kurulumunu sabitle.
 2. Dönüşüm motorunun font/geçici profil ihtiyaçlarını dört profilde doğrula.
@@ -32,7 +32,7 @@ Mevcut seçim kutusu gerçek paket kurulumunun tamamlandığı anlamına gelmez.
 
 Kabul: Dört profil için gerçek PDF + alıcı + dosya gözlem kanıtı. Ağ yapılandırması deney paketine eklenir.
 
-## Aşama 3 · Bağımsız dosya gözlemi ve doğruluk (v0.3)
+## Aşama 3 · Bağımsız dosya gözlemi ve doğruluk (v0.4)
 
 - Linux sistem çağrısı/denetim gözlemini eklenti dışından topla.
 - Açma, okuma ve başarısız erişimleri ayrı değerlendir; PID/run_id ile bağla.

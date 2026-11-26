@@ -21,6 +21,7 @@ from docx import Document
 from pypdf import PdfReader
 from fixtures import FILES
 from sandbox import PROFILES, capability, command
+from packages import PluginStore, build_package
 
 ROOT = Path(__file__).resolve().parent
 MAX_INPUT = 8 * 1024 * 1024
@@ -68,6 +69,7 @@ class Lab:
         if self.data == ROOT or ROOT in self.data.parents:
             raise ValueError("Çalışma verisi kaynak klasörünün dışında olmalıdır.")
         self.data.mkdir(parents=True, exist_ok=True)
+        self.plugins = PluginStore(self.data / "_plugins")
         self.runs = {}
         self.lock = threading.RLock()
         self.slots = threading.BoundedSemaphore(2)
@@ -124,7 +126,7 @@ class Lab:
         return Receiver
 
     def health(self):
-        return {"system": __import__("platform").system(), "converter": bool(self.soffice),
+        return {"application_version": "0.2.0", "system": __import__("platform").system(), "converter": bool(self.soffice),
             "sandbox": self.sandbox, "independent_file_observer": False,
             "profiles": [{"id": key, **value, "available": key == "A" or self.sandbox["available"]}
                          for key, value in PROFILES.items()]}
@@ -137,6 +139,9 @@ class Lab:
             raise ValueError("İstenen izolasyon bu ortamda yok; deney başlatılmadı.")
         if not self.soffice:
             raise ValueError("LibreOffice bulunamadı. soffice yükleyin veya HIZLIPDF_SOFFICE ayarlayın.")
+        plugin_id = payload.get("plugin_id") or "hizlipdf." + plugin
+        info, package_data = self.plugins.resolve(plugin_id)
+        plugin = info["variant"]
         try:
             data = base64.b64decode(payload.get("content_base64", ""), validate=True)
         except (ValueError, binascii.Error, TypeError) as exc:
@@ -151,10 +156,11 @@ class Lab:
         record = {"run_id": run_id, "profile": profile, "plugin": plugin, "filename": Path(filename).name,
                   "status": "queued", "token": secrets.token_hex(24), "receiver": [], "events": [],
                   "started_at": time.time(), "sandbox_applied": self.sandbox["available"],
-                  "independent_file_observer": False, "pdf": None}
+                  "independent_file_observer": False, "pdf": None, "analysis": None,
+                  "plugin_manifest": info["manifest"], "package_sha256": info["sha256"]}
         with self.lock:
             self.runs[run_id] = record
-        threading.Thread(target=self.execute, args=(record, data), daemon=True).start()
+        threading.Thread(target=self.execute, args=(record, data, package_data), daemon=True).start()
         return run_id
 
     def view(self, run_id):
@@ -164,7 +170,7 @@ class Lab:
                 return None
             return json.loads(json.dumps({k: v for k, v in record.items() if k != "token"}))
 
-    def execute(self, record, data):
+    def execute(self, record, data, package_data):
         start = time.monotonic()
         folder = self.data / record["run_id"]
         proc = None
@@ -174,18 +180,21 @@ class Lab:
             for name in ("output", "home", "tmp", "targets"):
                 (folder / name).mkdir()
             (folder / "input.docx").write_bytes(data)
+            (folder / "plugin.zip").write_bytes(package_data)
             for name, content in FILES.items():
                 (folder / "targets" / name).write_text(content, encoding="utf-8")
             sandboxed = record["sandbox_applied"]
             config = {"run_id": record["run_id"], "token": record["token"], "profile": record["profile"],
                       "plugin": record["plugin"], "sandbox": sandboxed,
+                      "plugin_id": record["plugin_manifest"]["id"], "package_sha256": record["package_sha256"],
+                      "package_path": str(folder / "plugin.zip"),
                       "receiver_url": f"http://127.0.0.1:{self.receiver.server_port}/collect",
                       "soffice": self.soffice,
                       "input": str(folder / "input.docx"), "output": str(folder / "output"),
                       "home": str(folder / "home"), "tmp": str(folder / "tmp"), "targets": str(folder / "targets")}
             if sandboxed:
                 config.update({"input": "/lab/input.docx", "output": "/lab/output", "home": "/lab/home",
-                               "tmp": "/tmp", "targets": "/lab/targets"})
+                               "tmp": "/tmp", "targets": "/lab/targets", "package_path": "/lab/plugin.zip"})
             config_path = folder / "config.json"
             config_path.write_text(json.dumps(config))
             config_path.chmod(0o600)
@@ -220,6 +229,8 @@ class Lab:
                              "text_excerpt": text[:900], "structurally_valid": True,
                              "content_match_verified": False,
                              "url": f"/api/runs/{record['run_id']}/pdf"}
+            record["analysis"] = json.loads((folder / "output/analysis.json").read_text(encoding="utf-8"))
+            record["analysis"]["evidence_source"] = "worker"
             outcome = "completed"
         except Exception as exc:
             record["error"] = str(exc)[:800]
@@ -283,6 +294,15 @@ def app_handler(lab):
             path = urlsplit(self.path).path
             if path == "/api/health":
                 return self.json(lab.health())
+            if path == "/api/plugins":
+                return self.json({"plugins": lab.plugins.listing()})
+            plugin_parts = path.strip("/").split("/")
+            if len(plugin_parts) == 4 and plugin_parts[:2] == ["api", "plugins"] and plugin_parts[3] == "package":
+                try:
+                    return self.send_bytes(build_package(plugin_parts[2]), "application/zip",
+                                           attachment=plugin_parts[2] + ".zip")
+                except ValueError as exc:
+                    return self.json({"error": str(exc)}, 404)
             if path == "/api/sample":
                 return self.send_bytes(sample_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", attachment="Musteri_Teklifi.docx")
             parts = path.strip("/").split("/")
@@ -308,7 +328,7 @@ def app_handler(lab):
         def do_POST(self):
             if not self.trusted():
                 return
-            if self.path != "/api/runs":
+            if self.path not in ("/api/runs", "/api/plugins/install", "/api/plugins/uninstall"):
                 return self.json({"error": "Bulunamadı."}, 404)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self.json({"error": "JSON gerekli."}, 415)
@@ -319,6 +339,15 @@ def app_handler(lab):
                 payload = json.loads(self.rfile.read(size))
                 if not isinstance(payload, dict):
                     raise ValueError("İstek nesne olmalıdır.")
+                if self.path == "/api/plugins/install":
+                    try:
+                        data = base64.b64decode(payload.get("package_base64", ""), validate=True)
+                    except (binascii.Error, TypeError) as exc:
+                        raise ValueError("Paket içeriği geçersiz.") from exc
+                    return self.json(lab.plugins.install(data))
+                if self.path == "/api/plugins/uninstall":
+                    lab.plugins.uninstall(payload.get("plugin_id"))
+                    return self.json({"success": True})
                 run_id = lab.create(payload)
                 self.json({"run_id": run_id}, 202)
             except (ValueError, TypeError) as exc:
@@ -329,7 +358,7 @@ def app_handler(lab):
 def main():
     parser = argparse.ArgumentParser(description="HızlıPDF - yerel eğitim laboratuvarı")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--data-dir", default=os.environ.get("HIZLIPDF_DATA", str(Path.cwd() / "work/hizlipdf-runtime")))
+    parser.add_argument("--data-dir", default=os.environ.get("HIZLIPDF_DATA", str(ROOT.parent / "work/hizlipdf-runtime")))
     args = parser.parse_args()
     lab = Lab(args.data_dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), app_handler(lab))

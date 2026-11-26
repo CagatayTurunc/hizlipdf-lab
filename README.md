@@ -4,7 +4,7 @@ Gerçek DOCX → PDF dönüşümü yapan yerel bir uygulama. Eğitim eklentisi a
 
 **Proje başlığı:** Linux Üzerinde İşlevini Sürdüren Trojan Davranışlı Belge Analiz Eklentisinin Simülasyonu: Uygulama Yetkilerinin Kötüye Kullanılmasıyla Görev Dışı Sentetik Veriye Erişim ve Aktarımın Gösterilmesi, Dosya ve Ağ İzolasyonunun Karşılaştırmalı Değerlendirilmesi.
 
-**Mevcut durum:** v0.1 çalışan yerel prototip. Gerçek eklenti paketi kurma/yükleme akışı ve DOCX belge analiz özeti henüz uygulanmadı. Şimdilik eklenti türü arayüzden seçilir ve ayrı işçi süreci olarak çalışır. Tarayıcı arayüzü, yerel Linux uygulamasının sunum katmanını temsil eder; kurulan bir tarayıcı eklentisi değildir.
+**Mevcut durum:** v0.2 yerel prototip. ZIP paketi kurma/kaldırma, sürümlü eklenti kaydı ve DOCX belge analizi çalışır. Paket, manifest ve bildirimsel işlem planı taşır; işçi, kurulan paketin çalışmaya özel kopyasını yükler. Keyfi Python/JavaScript kodu kurma desteklenmez. Tarayıcı arayüzü yerel RaporLab uygulamasının sunum katmanıdır; tarayıcı eklentisi değildir. Linux izolasyon profillerinin gerçek VM üzerinde doğrulanması sıradaki iştir.
 
 ## Başlatma
 
@@ -20,11 +20,12 @@ python3 -m venv .venv
 
 Adres: **http://127.0.0.1:8765**. `localhost` yerine bu adresi kullanın.
 
-1. **Sentetik örnek belgeyi kullan** düğmesine basın.
-2. Eğitim eklentisi ve A profiliyle dönüştürün.
-3. Gerçek PDF’yi önizleyin veya indirin.
-4. **Arka plana bak** düğmesiyle iki sentetik kaydın alıcıya ulaştığını görün.
-5. Normal referans eklentisiyle tekrar deneyin: PDF oluşur, ek erişim/aktarım olmaz.
+1. **Eklentiler** ekranında eğitim ve normal paketlerini kurun. **Paketi kur** düğmesi gerçek ZIP'i indirip doğrular; **ZIP paketi seç ve kur** düğmesi yerel dosyadan kurar. Hazır paketler `examples/plugins/` dizininde de bulunur.
+2. **Belge dönüştür** ekranında **Sentetik örnek belgeyi kullan** düğmesine basın.
+3. Kurulu eğitim eklentisini seçip A profiliyle dönüştürün.
+4. Başlık, kelime/sayı grubu, tablo ve dolu paragraf sayısını inceleyin; gerçek PDF’yi açın veya indirin.
+5. **Arka plana bak** düğmesiyle iki sentetik kaydın alıcıya ulaştığını görün.
+6. Normal referans eklentisiyle tekrar deneyin: aynı analiz ve PDF oluşur, ek erişim/aktarım olmaz.
 
 Örnek dosyada `20.000` toplamı ve Türkçe karakterler bulunur. `LAB-BUTCE-042` ve `LAB-KIRA-017` yalnızca görev dışı test dosyalarındadır.
 
@@ -40,9 +41,9 @@ Adres: **http://127.0.0.1:8765**. `localhost` yerine bu adresi kullanın.
 
 ## Çalışma verisi ve kanıt
 
-Varsayılan: komutu başlattığınız dizinde `work/hizlipdf-runtime/<run_id>/`.
+Varsayılan: kaynak depo klasörünün yanında `work/hizlipdf-runtime/<run_id>/`. Böylece `./start.sh` depo kökünden çalıştırıldığında veri, salt okunur bağlanabilecek kaynak ağacının dışında kalır.
 
-Kaynak klasörünün içine çalışma verisi yerleştirilmez. `--data-dir /mutlak/yol` ile dışarıda bir dizin seçilebilir. Her çalışma girdi, iki sentetik hedef, PDF ve `evidence.json` üretir. Per-run alıcı anahtarı kanıt JSON'una eklenmez. Sonuçlar uygulama yeniden başlayınca arayüzden geri yüklenmez; dosyalar diskte korunur.
+Kaynak klasörünün içine çalışma verisi yerleştirilmez. `--data-dir /mutlak/yol` ile dışarıda bir dizin seçilebilir. Kurulu paketler bu veri dizininin `_plugins/` alt klasöründe korunur. Her çalışma girdi, paket kopyası, iki sentetik hedef, `analysis.json`, PDF ve `evidence.json` üretir. Paket kimliği, sürümü ve SHA-256 özeti kanıta eklenir. Per-run alıcı anahtarı kanıt JSON'una eklenmez. Sonuçlar uygulama yeniden başlayınca arayüzden geri yüklenmez; dosyalar diskte korunur. Paketler çalışma başladıktan sonra kaldırılsa da o işin kopyası etkilenmez.
 
 ## Testler
 
@@ -57,9 +58,12 @@ Mimari: [ARCHITECTURE.md](ARCHITECTURE.md). Yol haritası: [ROADMAP.md](ROADMAP.
 ## Ekip ve proje belgeleri
 
 - [Senaryo ve hedef ürün](docs/SCENARIO.md)
+- [Eklenti paket sözleşmesi](docs/PLUGIN_PACKAGES.md)
 - [Birlikte geliştirme](CONTRIBUTING.md)
 - [Gerçek doğrulama kaydı](VERIFICATION.md)
 - [HızlıPDF teknik raporu](docs/reports/HizliPDF_Teknik_Simulasyon_Raporu.pdf)
 - [Önceki MaviRota senaryo raporu](docs/reports/MaviRota_Zararli_Eklenti_Simulasyonu_Raporu.pdf) — ilk fikir; güncel ürün kapsamı için README ve yol haritası esas alınır.
 
 ![Çalışan dönüşüm ekranı](docs/screenshots/HizliPDF_Donusum_Ekrani.jpg)
+
+![v0.2 eklenti yönetimi](docs/screenshots/HizliPDF_v02_Eklentiler.jpg)

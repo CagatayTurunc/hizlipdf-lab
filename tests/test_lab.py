@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixtures import FILES
 from sandbox import command
 from server import Lab, sample_docx, validate_docx
+from packages import build_package
 
 
 class InputTests(unittest.TestCase):
@@ -79,11 +80,14 @@ class LabTests(unittest.TestCase):
             self.lab.create({"profile": "B", "plugin": "education"})
         self.assertEqual(self.lab.runs, {})
 
-    def run_conversion(self, plugin, profile="A"):
+    def run_conversion(self, plugin, profile="A", uninstall_after_start=False):
         if not self.lab.soffice:
             self.skipTest("LibreOffice yok; gerçek dönüşüm testi atlandı.")
+        installed = self.lab.plugins.install(build_package("hizlipdf." + plugin))
         run_id = self.lab.create({"filename": "Musteri_Teklifi.docx", "profile": profile, "plugin": plugin,
                                   "content_base64": base64.b64encode(sample_docx()).decode()})
+        if uninstall_after_start:
+            self.lab.plugins.uninstall("hizlipdf." + plugin)
         deadline = time.monotonic() + 85
         while time.monotonic() < deadline:
             result = self.lab.view(run_id)
@@ -95,6 +99,10 @@ class LabTests(unittest.TestCase):
         self.assertIn("20.000", result["pdf"]["text_excerpt"])
         self.assertIn("Müşteri Teklifi", result["pdf"]["text_excerpt"])
         self.assertNotIn("LAB-BUTCE", result["pdf"]["text_excerpt"])
+        self.assertEqual(result["plugin_manifest"]["id"], "hizlipdf." + plugin)
+        self.assertEqual(result["package_sha256"], installed["sha256"])
+        self.assertEqual(result["analysis"]["table_count"], 1)
+        self.assertIn("Müşteri Teklifi", result["analysis"]["headings"])
         self.assertTrue((Path(self.temp.name) / run_id / "output/input.pdf").is_file())
         self.assertFalse((Path(self.temp.name) / run_id / "config.json").exists())
         return result
@@ -105,12 +113,19 @@ class LabTests(unittest.TestCase):
         normal = self.run_conversion("normal")
         education = self.run_conversion("education")
         self.assertEqual(normal["pdf"]["text_excerpt"], education["pdf"]["text_excerpt"])
+        self.assertEqual(normal["analysis"], education["analysis"])
         self.assertEqual(normal["receiver"], [])
         self.assertEqual(education["metrics"]["accepted_sources"], 2)
         self.assertEqual(education["metrics"]["accepted_bytes"], sum(len(x.encode()) for x in FILES.values()))
         self.assertEqual(len([x for x in education["receiver"] if x["kind"] == "LAB_PING"]), 1)
         self.assertFalse(education["sandbox_applied"])
         self.assertFalse(education["independent_file_observer"])
+
+    def test_uninstall_during_run_keeps_snapshot_but_rejects_next_run(self):
+        self.lab.sandbox = {"available": False, "reason": "Native baseline test"}
+        self.run_conversion("normal", uninstall_after_start=True)
+        with self.assertRaisesRegex(ValueError, "kurulu değil"):
+            self.lab.create({"plugin": "normal", "profile": "A"})
 
     def test_real_linux_profile_matrix(self):
         if not self.lab.sandbox["available"]:
