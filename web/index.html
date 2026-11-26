@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HızlıPDF · MaviRota Laboratuvarı</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="HızlıPDF ana sayfa"><span class="brand-mark">H</span>HızlıPDF<span class="beta">LAB</span></a>
+    <div class="workspace"><span class="avatar">M</span><div>MaviRota Danışmanlık<small>Belge çalışma alanı</small></div></div>
+    <div class="nav-label">ÇALIŞMA ALANI</div>
+    <button class="nav active" id="user-tab"><span>▤</span> Belge dönüştür</button>
+    <button class="nav" id="observer-tab"><span>◉</span> Deney gözlemcisi</button>
+    <div class="sidebar-bottom"><span class="status-dot"></span> Yerel eğitim laboratuvarı<p>Yalnızca sentetik veriler.<br>Gerçek dönüşüm, görünür kanıt.</p></div>
+  </aside>
+  <main>
+    <header><div class="breadcrumb">MaviRota <span>/</span> Belge araçları</div><div class="local-badge">● LOCALHOST</div></header>
+    <section class="view" id="user-view">
+      <div class="eyebrow">BELGENİZ, BİR ADIM SONRA.</div>
+      <h1>DOCX’ten PDF’ye.<br><span>İşiniz kaldığı yerden devam etsin.</span></h1>
+      <p class="intro">Belgenizi seçin, dönüştürün ve PDF’nizi indirin.<br>Tablolarınızı ve metninizi gerçek dönüşüm motoruyla işleyin.</p>
+      <div class="converter-grid">
+        <section class="card convert-card">
+          <div class="card-top"><h2>Yeni dönüştürme</h2><span class="muted">01 / BELGE</span></div>
+          <label class="dropzone" id="dropzone" for="file-input"><span class="doc-icon">W</span><strong id="file-name">DOCX belgenizi seçin</strong><span id="file-meta">Dosya seçmek için tıklayın · En fazla 8 MiB</span><span class="file-pill">.DOCX</span></label>
+          <input type="file" id="file-input" accept=".docx" hidden>
+          <button class="sample" id="sample-button">↳ Sentetik örnek belgeyi kullan</button>
+          <div class="divider"></div>
+          <div class="field-grid"><label>Eklenti<select id="plugin"><option value="education">HızlıPDF · Eğitim eklentisi</option><option value="normal">HızlıPDF · Normal referans</option></select></label><label>Çalışma profili<select id="profile"><option value="A">A · Geniş laboratuvar yetkisi</option></select></label></div>
+          <p class="environment" id="environment">Çalışma ortamı kontrol ediliyor…</p>
+          <button class="primary" id="convert-button" disabled>PDF’ye dönüştür <span>→</span></button>
+          <div id="conversion-status" role="status" aria-live="polite" class="conversion-status">Başlamak için bir DOCX seçin.</div>
+          <div id="error" class="error" role="alert" hidden></div>
+        </section>
+        <section class="card output-card"><div class="card-top"><h2>PDF çıktısı</h2><span class="muted">02 / SONUÇ</span></div>
+          <div id="output-empty" class="output-empty"><div class="pdf-outline">PDF</div><h3>Yeni belgeniz burada görünecek.</h3><p>Dönüşüm tamamlanınca önizleyebilir<br>ve PDF’nizi indirebilirsiniz.</p></div>
+          <div id="output-ready" hidden><div class="success-tag">✓ PDF yapısal doğrulamayı geçti</div><div class="pdf-details" id="pdf-details"></div><iframe id="pdf-preview" title="Dönüştürülen PDF önizlemesi"></iframe><a class="primary download" id="download" download="Musteri_Teklifi.pdf">PDF’yi indir ↓</a><p class="small-note">İçerik ve sayfa düzenini önizlemeden kontrol edin.</p></div>
+        </section>
+      </div>
+      <div class="insight"><span>◈</span><div><strong>Doğru çıktı, hikâyenin tamamı mı?</strong><p>Dönüşümden sonra Deney gözlemcisi’nde eklentinin ek erişimlerini inceleyin.</p></div><button id="reveal-button">Arka plana bak →</button></div>
+    </section>
+    <section class="view" id="observer-view" hidden>
+      <div class="eyebrow">AYNI ÇALIŞMANIN DİĞER YÜZÜ</div><h1>PDF hazır.<br><span>Peki başka ne oldu?</span></h1>
+      <p class="intro">Eklentinin bildirdiği dosya erişimleri ve alıcının bağımsız kabul kayıtları.<br>Bu sürümde bağımsız işletim sistemi dosya gözlemi henüz yok.</p>
+      <div id="no-run" class="card no-run">Önce Belge dönüştür ekranında bir deney başlatın.</div>
+      <div id="evidence-view" hidden>
+        <div class="run-strip"><div><span class="muted">ÇALIŞMA</span><code id="run-id"></code></div><div id="run-profile"></div><a id="evidence-download" class="text-link">Kanıt JSON’unu indir ↗</a></div>
+        <div class="metrics"><div class="card metric"><span>PDF çıktısı</span><strong id="metric-pdf">—</strong><small>Uygulama doğrulaması</small></div><div class="card metric"><span>Görev dışı okuma</span><strong id="metric-reads">—</strong><small>İşçi bildirimi · bağımsız doğrulanmadı</small></div><div class="card metric"><span>Alıcıya ulaşan kaynak</span><strong id="metric-sources">—</strong><small>Bağımsız alıcı kanıtı</small></div><div class="card metric"><span>İçerik yükü</span><strong id="metric-bytes">—</strong><small>LAB-PING hariç</small></div></div>
+        <div class="evidence-grid"><section class="card"><div class="card-top"><h2>Seçim ve erişim kapsamı</h2></div><div class="selected-file" id="selected-file"></div><div id="access-list"></div><p class="small-note">Okuma sonuçları işçiden gelir. Alıcı kabulü ayrı servis tarafından kaydedilir.</p></section><section class="card"><div class="card-top"><h2>Yerel alıcı</h2><span class="receiver-badge">BAĞIMSIZ KAYIT</span></div><div id="receiver-list"></div></section></div>
+        <section class="card events-card"><div class="card-top"><h2>Olay akışı</h2><span class="muted" id="duration"></span></div><div class="table-scroll"><table><thead><tr><th>Süre</th><th>Olay</th><th>Kaynak</th><th>Sonuç</th></tr></thead><tbody id="events"></tbody></table></div></section>
+        <div class="lab-note" id="evidence-note"></div>
+      </div>
+    </section>
+    <footer>HızlıPDF / MaviRota <span>Kontrollü siber güvenlik simülasyonu · v0.1</span></footer>
+  </main>
+</body></html>
