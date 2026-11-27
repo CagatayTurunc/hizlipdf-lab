@@ -159,3 +159,28 @@
 @media (max-width: 770px) {
   .isolation-controls, .isolation-facts { grid-template-columns: 1fr; }
 }
+
+.benchmark-history {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px 18px;
+  margin-bottom: 22px;
+}
+.benchmark-history label { display: block; font-weight: 650; }
+.benchmark-history select { min-height: 43px; font-size: 12px; }
+.benchmark-history #benchmark-history-status { grid-column: 1 / -1; margin: 0; color: var(--muted); }
+.benchmark-saved-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.benchmark-saved-head p { margin-top: 3px; }
+.benchmark-download { display: inline-block; font-weight: 650; text-decoration: none; }
+.benchmark-retry { margin-top: 10px; }
+@media (max-width: 550px) {
+  .benchmark-history { grid-template-columns: 1fr; }
+}

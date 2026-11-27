@@ -183,10 +183,24 @@
         <div id="benchmark-progress" class="benchmark-progress-container" hidden>
           <div class="benchmark-progress-label" role="status"><span id="benchmark-status-text">Deney başlatılıyor…</span><strong id="benchmark-pct">%0</strong></div>
           <div class="progress-track"><div id="benchmark-bar-fill" class="progress-fill"></div></div>
+          <button class="secondary benchmark-retry" id="benchmark-save-retry" hidden>Kaydetmeyi yeniden dene</button>
         </div>
       </section>
 
+      <section class="card benchmark-history">
+        <div>
+          <label for="benchmark-history-list">Kayıtlı deney</label>
+          <select id="benchmark-history-list"><option value="">Kayıt aranıyor…</option></select>
+        </div>
+        <button class="secondary" id="benchmark-history-open" disabled>Kaydı aç</button>
+        <p id="benchmark-history-status" role="status" hidden></p>
+      </section>
+
       <div id="benchmark-results" hidden>
+        <div class="benchmark-saved-head">
+          <div><h2 id="benchmark-result-title"></h2><p id="benchmark-result-detail" class="small-note"></p></div>
+          <a class="secondary benchmark-download" id="benchmark-evidence">Kanıt paketini indir ↓</a>
+        </div>
         <div class="benchmark-cols-grid" id="benchmark-cols"></div>
 
         <div class="benchmark-charts-grid">

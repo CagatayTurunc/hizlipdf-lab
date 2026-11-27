@@ -95,7 +95,8 @@ Deney gözlemcisindeki **Adli Bilişim Raporu (.html / .pdf)** bağlantısı ça
 4. Aynı dönüşümü Profil D'de çalıştırın. PDF durumunu, iki sentetik hedefe ilişkin dosya açma kayıtlarını ve yerel alıcıya bağlantı sonucunu karşılaştırın.
 5. **Canlı karşılaştırma** ekranında A ve D profillerini aynı örnek DOCX ve eğitim paketiyle çalıştırın. İki PDF’yi, örnek belge kontrollerini ve dört kanıt adımını yan yana inceleyin. `pdftoppm` kullanılamadığında ekranda PDF’den çıkarılan metin gösterilir. Ubuntu’da ilk sayfa görseli için `poppler-utils` kurulabilir.
 6. **İzolasyon inceleyicisi** ekranında B ve C profillerini ayrı ayrı çalıştırın. İşçinin bağlama kaydını, iki ağ ad alanı kimliğini ve çalışmanın `openat()` sonuçlarını inceleyin.
-7. Tekrarlı ölçüm için **Karşılaştırma & Benchmark** sekmesini açın. Rapor bağlantıları her profilin çalışma kayıtlarında bulunur.
+7. Tekrarlı ölçüm için **Karşılaştırma & Benchmark** sekmesini açın. Bitince **Kanıt paketini indir** düğmesi profil ayarlarını, sistem çağrılarını, alıcı kayıtlarını, PDF kontrollerini ve ölçümleri tek JSON dosyasına yazar.
+8. Aynı veri diziniyle yeniden başlattığınızda **Kayıtlı deney → Kaydı aç** üzerinden geçmiş seriyi açabilirsiniz. Rapor bağlantıları her profilin çalışma kayıtlarında bulunur. Arşiv özelliğinden önceki ölçümlerin çalışma kayıtları seriye otomatik olarak gruplanmaz.
 
 ---
 

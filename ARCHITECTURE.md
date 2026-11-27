@@ -56,7 +56,11 @@ Bu ilk sandbox, minimal Linux laboratuvarı için hazırlanmıştır. Sistem `/u
 - `POST /api/runs`: `{filename, content_base64, plugin_id, profile: A|B|C|D}`; yalnızca kurulu paketle `202 {run_id}` döner. Eski `plugin: normal|education` alanı da kurulum zorunluluğuyla desteklenir.
 - `GET /api/runs/<id>`: durum, işçi olayları, alıcı kayıtları, PDF ve metrikler.
 - `GET /api/runs/<id>/pdf`: tamamlanmış çıktıyı gösterir/indirir.
-- `GET /api/runs/<id>/evidence`: per-run gizli anahtar olmadan JSON kanıtı.
+- `GET /api/runs/<id>/evidence`: çalışma anahtarı çıkarılarak hazırlanan JSON kaydı.
+- `POST /api/benchmarks`: ısınma ve ölçüm turlarındaki çalışma kimliklerinden bir deney serisi kaydeder.
+- `GET /api/benchmarks`: aynı veri dizininden kayıtlı deneyleri listeler.
+- `GET /api/benchmarks/<id>`: kayıtlı serinin kanıtlarını ve ölçüm özetini açar.
+- `GET /api/benchmarks/<id>/evidence`: aynı seriyi tek JSON dosyası olarak indirir.
 
 Durumlar: `queued → running → completed|failed`. Aynı anda en fazla iki iş; işçi grubu için 75 saniye, motor için 60 saniye sınırı. İşçi süre aşımında süreç grubu sonlandırılır. Ek ağ hataları PDF dönüşümünden ayrı kaydedilir.
 

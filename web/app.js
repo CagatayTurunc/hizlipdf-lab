@@ -1,6 +1,8 @@
 const $ = (id) => document.getElementById(id);
 let file = null, health = null, currentRun = null, busy = false, plugins = [], pluginBusy = false;
 let benchmarkRunning = false, comparisonRunning = false, isolationRunning = false;
+let openingBenchmark = false;
+let pendingBenchmark = null;
 const syscallLabels = { allowed: 'BAŞARILI', error: 'HATA', pending: 'BAĞLANTI BEKLEMEDE' };
 const names = {PROCESS_STARTED:'İşçi başladı',ISOLATION_OBSERVED:'Linux ad alanı gözlemi',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Yerel bağlantı testi',LAB_PROBE_FINISHED:'Ek deney adımı tamamlandı',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
 const results = {ok:'Başarılı (işçi)',partial:'Bazı kayıtlar alınamadı',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
@@ -16,7 +18,10 @@ function view(name) {
 $('user-tab').onclick = () => view('user');
 $('plugins-tab').onclick = $('manage-plugins').onclick = () => view('plugins');
 $('observer-tab').onclick = $('reveal-button').onclick = () => view('observer');
-$('benchmark-tab').onclick = () => view('benchmark');
+$('benchmark-tab').onclick = () => {
+  view('benchmark');
+  refreshBenchmarkHistory();
+};
 $('comparison-tab').onclick = () => view('comparison');
 $('isolation-tab').onclick = () => view('isolation');
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
@@ -24,7 +29,10 @@ function runInProgress() { return busy || benchmarkRunning || comparisonRunning 
 function refreshButton() {
   const active = runInProgress();
   $('convert-button').disabled = active || !file || !health?.converter || !$('plugin').value;
-  $('run-comparison-btn').disabled = $('run-benchmark-btn').disabled = $('run-isolation-btn').disabled = active;
+  $('run-comparison-btn').disabled = $('run-isolation-btn').disabled = active;
+  $('run-benchmark-btn').disabled = active || openingBenchmark;
+  $('benchmark-history-open').disabled = benchmarkRunning || openingBenchmark || !$('benchmark-history-list').value;
+  $('benchmark-save-retry').disabled = benchmarkRunning;
 }
 $('plugin').onchange = refreshButton;
 function selectFile(next) {
@@ -241,8 +249,6 @@ async function pluginAction(action) {
 }
 $('plugin-upload-button').onclick=()=>$('plugin-file').click();
 $('plugin-file').onchange=(event)=>{ const selected=event.target.files[0]; if(selected) pluginAction(async()=>{await installBlob(selected); return 'Seçilen paket doğrulandı ve kuruldu.';}); event.target.value=''; };
-const benchmarkRepeats = 5;
-
 async function educationTrial(profile, documentData, onUpdate) {
   const { run_id: runId } = await json('/api/runs', {
     method: 'POST',
@@ -542,12 +548,92 @@ function renderComparisonRun(card, data) {
 }
 $('run-comparison-btn').onclick = runComparison;
 
+async function refreshBenchmarkHistory(selected) {
+  const list = $('benchmark-history-list');
+  const status = $('benchmark-history-status');
+  try {
+    const { benchmarks } = await json('/api/benchmarks');
+    const previous = selected || list.value;
+    list.replaceChildren(element('option', benchmarks.length ? 'Kaydedilmiş bir seri seçin' : 'Henüz kayıtlı deney yok'));
+    list.firstElementChild.value = '';
+    for (const bundle of benchmarks) {
+      const state = bundle.state === 'partial' ? 'Eksik ölçüm' : 'Tamamlandı';
+      const label = `${benchmarkDate(bundle.saved_at)} · ${bundle.document.filename || 'Belge kaydı yok'} · ${state}`;
+      const option = element('option', label);
+      option.value = bundle.series_id;
+      list.append(option);
+    }
+    if (benchmarks.some(bundle => bundle.series_id === previous)) list.value = previous;
+    if (!openingBenchmark) status.hidden = true;
+    refreshButton();
+  } catch (err) {
+    status.textContent = `Kayıt listesi alınamadı. ${err.message}`;
+    status.hidden = false;
+  }
+}
+
+function benchmarkDate(timestamp) {
+  return new Date(timestamp * 1000).toLocaleString('tr-TR');
+}
+
+$('benchmark-history-list').onchange = refreshButton;
+$('benchmark-history-open').onclick = async () => {
+  const id = $('benchmark-history-list').value;
+  if (!id || benchmarkRunning || openingBenchmark) return;
+  openingBenchmark = true;
+  refreshButton();
+  const status = $('benchmark-history-status');
+  status.textContent = 'Kayıtlı gözlemler açılıyor…';
+  status.hidden = false;
+  try {
+    const bundle = await json(`/api/benchmarks/${id}`);
+    renderBenchmarkResults(bundle, true);
+    status.hidden = true;
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    openingBenchmark = false;
+    refreshButton();
+  }
+};
+
+async function saveBenchmark() {
+  const bundle = await json('/api/benchmarks', {
+    method: 'POST',
+    signal: AbortSignal.timeout(10000),
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(pendingBenchmark)
+  });
+  pendingBenchmark = null;
+  $('benchmark-save-retry').hidden = true;
+  renderBenchmarkResults(bundle, false);
+  await refreshBenchmarkHistory(bundle.series_id);
+}
+
+$('benchmark-save-retry').onclick = async () => {
+  if (!pendingBenchmark || benchmarkRunning) return;
+  benchmarkRunning = true;
+  refreshButton();
+  const status = $('benchmark-status-text');
+  status.textContent = 'Deney paketi kaydediliyor…';
+  try {
+    await saveBenchmark();
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    benchmarkRunning = false;
+    refreshButton();
+  }
+};
+
 async function runBenchmark() {
-  if (runInProgress()) return;
+  if (runInProgress() || openingBenchmark) return;
   benchmarkRunning = true;
   refreshButton();
   $('benchmark-progress').hidden = false;
   $('benchmark-results').hidden = true;
+  $('benchmark-save-retry').hidden = true;
+  pendingBenchmark = null;
 
   function progress(done, count, status) {
     const percent = Math.round(done * 100 / count);
@@ -559,7 +645,9 @@ async function runBenchmark() {
   try {
     progress(0, 1, 'Deney koşulları kontrol ediliyor…');
     health = await json('/api/health');
-    if (!health.converter || !health.profiles.every(profile => profile.available)) {
+    const profiles = health.profiles;
+    const repeats = health.benchmark_repetitions;
+    if (!health.converter || !profiles.every(profile => profile.available)) {
       throw Error('Dört profilin karşılaştırılması için LibreOffice ve çalışan Linux bubblewrap ortamı gerekli.');
     }
     const installed = (await json('/api/plugins')).plugins;
@@ -574,86 +662,69 @@ async function runBenchmark() {
       sample = new File([await response.blob()], 'Musteri_Teklifi.docx');
     }
     const documentData = { filename: sample.name, content_base64: await base64File(sample) };
-    const profiles = health.profiles;
-    const trials = Object.fromEntries(profiles.map(profile => [profile.id, []]));
-    const total = profiles.length * (benchmarkRepeats + 1);
-    let done = 0;
+    const total = profiles.length * (repeats + 1);
+    const seriesId = crypto.randomUUID().replaceAll('-', '');
+    const attempts = [];
 
     // Round 0 warms each profile. Rotate the starting profile on each measured round.
-    for (let round = 0; round <= benchmarkRepeats; round++) {
+    for (let round = 0; round <= repeats; round++) {
       for (let offset = 0; offset < profiles.length; offset++) {
         const profile = profiles[(round + offset) % profiles.length];
-        const phase = round === 0 ? 'Isınma' : `Tur ${round}/${benchmarkRepeats}`;
-        progress(done, total, `${phase} · Profil ${profile.id}`);
+        const phase = round === 0 ? 'Isınma' : `Tur ${round}/${repeats}`;
+        progress(attempts.length, total, `${phase} · Profil ${profile.id}`);
         let data;
         try {
           data = await educationTrial(profile.id, documentData);
         } catch (err) {
-          data = { status: 'unknown', error: err.message };
+          data = { error: err.message };
         }
-        trials[profile.id].push({ round, data });
-        done++;
+        attempts.push({ profile: profile.id, round, run_id: data.run_id || null, error: data.error });
       }
     }
-    progress(done, total, 'Deney serisi tamamlandı.');
-    renderBenchmarkResults(profiles, trials);
+    pendingBenchmark = { series_id: seriesId, attempts };
+    progress(total, total, 'Deney paketi kaydediliyor…');
+    await saveBenchmark();
   } catch (err) {
     $('benchmark-status-text').textContent = err.message;
+    $('benchmark-save-retry').hidden = !pendingBenchmark;
   } finally {
     benchmarkRunning = false;
     refreshButton();
   }
 }
 
-function measurement(values) {
-  const sorted = values.filter(value => Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
-  if (!sorted.length) return null;
-  const middle = Math.floor(sorted.length / 2);
-  const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-  return { median, min: sorted[0], max: sorted.at(-1), count: sorted.length };
-}
 function measurementText(stats, unit) {
   if (!stats) return 'Doğrulanmadı';
   return `${stats.median} ${unit} · ${stats.min}–${stats.max} ${unit} · n=${stats.count}`;
 }
-function renderBenchmarkResults(profiles, trials) {
+function renderBenchmarkResults(bundle, saved) {
+  const { profiles, trials, summary, method } = bundle;
+  const repeats = method.repetitions_per_profile;
+  $('benchmark-progress').hidden = true;
+  $('benchmark-result-title').textContent = saved ? 'Kayıtlı deney' : 'Deney serisi kaydedildi';
+  const state = bundle.state === 'partial' ? 'Eksik ölçüm' : 'Tamamlandı';
+  $('benchmark-result-detail').textContent =
+    `${bundle.document.filename || 'Belge kaydı yok'} · ${benchmarkDate(bundle.saved_at)} · ${state}`;
+  $('benchmark-evidence').href = `/api/benchmarks/${bundle.series_id}/evidence`;
+
   const cards = $('benchmark-cols');
   cards.replaceChildren();
-  const summary = {};
   for (const profile of profiles) {
     const attempts = trials[profile.id];
-    const completed = attempts.filter(({round, data}) =>
-      round > 0 && data.status === 'completed' && data.pdf?.structurally_valid
-    ).map(({data}) => data);
-    const durations = completed.map(data => data.total_ms);
-    const bytes = completed.filter(data => data.receiver.length
-      || (data.receiver_health?.before && data.receiver_health?.after)
-    ).map(data => data.metrics?.accepted_bytes);
-    const total = measurement(durations);
-    const accepted = measurement(bytes);
-    const conversion = measurement(completed.map(data =>
-      data.events.find(event => event.event === 'CONVERSION_FINISHED' && event.result === 'ok')?.duration_ms
-    ));
-    const extra = measurement(completed.map(data =>
-      data.events.find(event => event.event === 'LAB_PROBE_FINISHED')?.duration_ms
-    ));
-    summary[profile.id] = { total, accepted };
-
-    const opened = completed.filter(data => data.file_audit?.status === 'opened').length;
-    const unavailableFiles = completed.filter(data => data.file_audit?.status === 'unavailable').length;
-    const reachable = completed.filter(data => data.network_audit?.status === 'reachable').length;
-    const unreachable = completed.filter(data => data.network_audit?.status === 'unreachable').length;
+    const data = summary[profile.id];
     const card = element('section', undefined, 'benchmark-col-card');
     card.append(element('span', `Profil ${profile.id}`, 'benchmark-col-badge'),
       element('h3', profile.name, 'benchmark-col-title'));
     const metrics = [
-      ['Geçerli PDF', `${completed.length}/${benchmarkRepeats}`],
-      ['Alıcının kabul ettiği içerik', measurementText(accepted, 'bayt')],
-      ['İki dosya için açma sonucu', `${opened} başarılı · ${unavailableFiles} başarısız · ${completed.length - opened - unavailableFiles} doğrulanmadı`],
-      ['Yerel alıcıya bağlantı', `${reachable} erişildi · ${unreachable} başarısız · ${completed.length - reachable - unreachable} doğrulanmadı`],
-      ['Toplam süre', measurementText(total, 'ms')],
-      ['PDF dönüşümü (işçi)', measurementText(conversion, 'ms')],
-      ['Ek deney adımı (işçi)', measurementText(extra, 'ms')]
+      ['Geçerli PDF', `${data.valid_pdf}/${repeats}`],
+      ['Örnek PDF içerik kontrolleri', data.pdf_reference_checked
+        ? `${data.pdf_reference_passed}/${data.pdf_reference_checked} geçti` : 'Referans yok'],
+      ['Alıcının kabul ettiği içerik', measurementText(data.accepted, 'bayt')],
+      ['İki dosya için açma sonucu', `${data.files.opened} başarılı · ${data.files.unavailable} başarısız · ${data.files.unverified} doğrulanmadı`],
+      ['Yerel alıcıya bağlantı', `${data.network.reachable} erişildi · ${data.network.unreachable} başarısız · ${data.network.unverified} doğrulanmadı`],
+      ['Toplam süre', measurementText(data.total, 'ms')],
+      ['PDF dönüşümü (işçi)', measurementText(data.conversion, 'ms')],
+      ['Ek deney adımı (işçi)', measurementText(data.extra, 'ms')]
     ];
     for (const [label, value] of metrics) {
       const row = element('div', undefined, 'benchmark-metric-item');
@@ -687,9 +758,9 @@ function renderBenchmarkResults(profiles, trials) {
   renderBenchmarkChart($('chart-data-leak'), profiles, summary, 'accepted', 'B');
   renderBenchmarkChart($('chart-latency'), profiles, summary, 'total', 'ms');
   const a = summary.A.total, d = summary.D.total;
-  $('overhead-summary-text').textContent = a?.count === benchmarkRepeats && d?.count === benchmarkRepeats
+  $('overhead-summary-text').textContent = a?.count === repeats && d?.count === repeats
     ? `D ile A arasındaki toplam süre medyanı farkı ${d.median - a.median} ms. Toplam süre, dosya hazırlığı, dönüşüm, ek deney adımı ve çıktı kontrolünü kapsar.`
-    : `A ile D arasındaki medyan farkı için iki profilde de ${benchmarkRepeats} geçerli ölçüm gerekiyor.`;
+    : `A ile D arasındaki medyan farkı için iki profilde de ${repeats} geçerli ölçüm gerekiyor.`;
   $('benchmark-results').hidden = false;
 }
 

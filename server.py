@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 from docx import Document
 from pypdf import PdfReader
+from benchmarks import BenchmarkStore, REPETITIONS, is_hex_id
 from fixtures import FILES
 from linux_isolation import isolation_evidence, read_network_namespace
 from observations import assess, mitre_mapping, read_syscalls
@@ -621,6 +622,7 @@ class Lab:
             raise ValueError("Çalışma verisi kaynak klasörünün dışında olmalıdır.")
         self.data.mkdir(parents=True, exist_ok=True)
         self.plugins = PluginStore(self.data / "_plugins")
+        self.benchmarks = BenchmarkStore(self.data / "_benchmarks")
         self.sample = sample_docx()
         self.preview_renderer = shutil.which("pdftoppm")
         self.runs = {}
@@ -710,7 +712,7 @@ class Lab:
 
     def health(self):
         return {"application_version": "0.2.0", "system": __import__("platform").system(), "converter": bool(self.soffice),
-            "sandbox": self.sandbox, "independent_file_observer": False,
+            "sandbox": self.sandbox, "independent_file_observer": False, "benchmark_repetitions": REPETITIONS,
             "profiles": [{"id": key, **value, "available": key == "A" or self.sandbox["available"]}
                          for key, value in PROFILES.items()]}
 
@@ -773,14 +775,27 @@ class Lab:
     def view(self, run_id):
         with self.lock:
             record = self.runs.get(run_id)
-            if not record:
-                return None
-            snapshot = json.loads(json.dumps({k: v for k, v in record.items() if k != "token"}))
+            snapshot = json.loads(json.dumps({k: v for k, v in record.items() if k != "token"})) if record else None
+        if snapshot is None:
+            return self.read_saved_run(run_id)
         if snapshot["status"] == "running":
             snapshot["events"] = read_worker_events(self.data / run_id / "worker-events.jsonl")
             if snapshot.get("sandbox_requested"):
                 snapshot["isolation"] = isolation_evidence(snapshot["events"], self.receiver_network)
         return snapshot
+
+    def read_saved_run(self, run_id):
+        if not is_hex_id(run_id):
+            return None
+        try:
+            record = json.loads((self.data / run_id / "evidence.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if (not isinstance(record, dict) or record.get("run_id") != run_id
+                or record.get("status") not in ("completed", "failed") or "file_audit" not in record):
+            return None
+        record.pop("token", None)
+        return record
 
     def render_sample_preview(self, pdf_path):
         if not self.preview_renderer:
@@ -954,10 +969,24 @@ def app_handler(lab):
                     return self.json({"error": str(exc)}, 404)
             if path == "/api/sample":
                 return self.send_bytes(lab.sample, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", attachment=SAMPLE_FILENAME)
+            if path == "/api/benchmarks":
+                return self.json({"benchmarks": lab.benchmarks.list()})
             parts = path.strip("/").split("/")
+            if len(parts) in (3, 4) and parts[:2] == ["api", "benchmarks"]:
+                series_id = parts[2]
+                bundle = lab.benchmarks.load(series_id)
+                if not bundle:
+                    return self.json({"error": "Kayıtlı deney bulunamadı."}, 404)
+                if len(parts) == 3:
+                    return self.json(bundle)
+                if parts[3] == "evidence":
+                    return self.send_bytes(
+                        json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8"), "application/json",
+                        attachment=f"hizlipdf-deney-{series_id[:8]}.json"
+                    )
             if len(parts) in (3, 4) and parts[:2] == ["api", "runs"]:
                 run_id = parts[2]
-                if len(run_id) != 32 or any(c not in "0123456789abcdef" for c in run_id):
+                if not is_hex_id(run_id):
                     return self.json({"error": "Çalışma bulunamadı."}, 404)
                 record = lab.view(run_id)
                 if not record:
@@ -971,7 +1000,9 @@ def app_handler(lab):
                 if record["status"] == "completed" and record["pdf"]:
                     output = lab.data / run_id / "output"
                     if parts[3] == "pdf":
-                        return self.send_bytes((output / "input.pdf").read_bytes(), "application/pdf")
+                        pdf_path = output / "input.pdf"
+                        if pdf_path.is_file():
+                            return self.send_bytes(pdf_path.read_bytes(), "application/pdf")
                     if parts[3] == "preview" and record["pdf"].get("preview_url"):
                         preview = output / "sample-preview.png"
                         if preview.is_file():
@@ -985,7 +1016,7 @@ def app_handler(lab):
         def do_POST(self):
             if not self.trusted():
                 return
-            if self.path not in ("/api/runs", "/api/plugins/install", "/api/plugins/uninstall"):
+            if self.path not in ("/api/runs", "/api/plugins/install", "/api/plugins/uninstall", "/api/benchmarks"):
                 return self.json({"error": "Bulunamadı."}, 404)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self.json({"error": "JSON gerekli."}, 415)
@@ -1005,6 +1036,12 @@ def app_handler(lab):
                 if self.path == "/api/plugins/uninstall":
                     lab.plugins.uninstall(payload.get("plugin_id"))
                     return self.json({"success": True})
+                if self.path == "/api/benchmarks":
+                    try:
+                        bundle = lab.benchmarks.save(payload, lab.view)
+                    except OSError:
+                        return self.json({"error": "Deney paketi diske kaydedilemedi."}, 500)
+                    return self.json(bundle, 201)
                 run_id = lab.create(payload)
                 self.json({"run_id": run_id}, 202)
             except (ValueError, TypeError) as exc:
