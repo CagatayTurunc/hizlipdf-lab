@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>HızlıPDF Laboratuvarı - Kapsamlı Bitirme ve Adli Bilişim Raporu</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            --primary: #0f172a;
+            --accent: #0284c7;
+            --success: #16a34a;
+            --danger: #dc2626;
+            --warning: #d97706;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --border: #e2e8f0;
+            --text: #1e293b;
+            --muted: #64748b;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 40px 20px;
+            background: var(--bg);
+            color: var(--text);
+            font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        }
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 4px 25px rgba(0,0,0,0.06);
+            padding: 50px;
+        }
+        .header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f1f5f9;
+            padding: 14px 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border: 1px solid #cbd5e1;
+        }
+        .print-btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .print-btn:hover { background: #0369a1; }
+        h1 {
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--primary);
+            line-height: 1.3;
+            margin: 0 0 10px;
+        }
+        .meta-p {
+            font-size: 13px;
+            color: var(--muted);
+            margin: 0 0 24px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid var(--primary);
+        }
+        h2 {
+            font-size: 18px;
+            color: var(--primary);
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 8px;
+            margin: 36px 0 16px;
+        }
+        h3 {
+            font-size: 15px;
+            color: #0369a1;
+            margin: 22px 0 8px;
+        }
+        p, li {
+            color: #334155;
+            font-size: 13.5px;
+        }
+        ul { padding-left: 20px; }
+        .highlight-box {
+            background: #f8fafc;
+            border-left: 4px solid var(--accent);
+            padding: 16px 20px;
+            border-radius: 0 8px 8px 0;
+            margin: 18px 0;
+        }
+        .crisis-card {
+            background: #fff5f5;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin-bottom: 12px;
+        }
+        .crisis-card strong { color: #991b1b; }
+        .crisis-card span { color: #166534; font-weight: 600; display: block; margin-top: 4px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 13px;
+        }
+        th, td {
+            border: 1px solid var(--border);
+            padding: 10px 12px;
+            text-align: left;
+        }
+        th { background: #f1f5f9; color: var(--primary); font-weight: 700; }
+        .badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-success { background: #dcfce7; color: #166534; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .qa-box {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+        .qa-q { font-weight: 700; color: #166534; margin-bottom: 6px; }
+        .qa-a { color: #1e293b; }
+        @media print {
+            body { background: #fff; padding: 0; }
+            .container { border: none; box-shadow: none; padding: 0; max-width: 100%; }
+            .no-print { display: none !important; }
+            h2, h3 { page-break-after: avoid; }
+            .crisis-card, table, .qa-box { page-break-inside: avoid; }
+            @page { size: A4 portrait; margin: 15mm; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-bar no-print">
+            <span style="font-weight: 700; color: #334155;">📑 HızlıPDF Kapsamlı Bitirme ve Adli Bilişim Raporu</span>
+            <button class="print-btn" onclick="window.print()">🖨️ PDF Olarak Kaydet / Yazdır</button>
+        </div>
+
+        <h1>Linux Üzerinde İşlevini Sürdüren Trojan Davranışlı Belge Analiz Eklentisinin Simülasyonu ve Çekirdek Seviyesinde Bubblewrap İzolasyon Mimarisi</h1>
+        <div class="meta-p">
+            <strong>Araştırmacı:</strong> Çağatay Turunç · 
+            <strong>Tarih:</strong> 27 Kasım 2026 · 
+            <strong>GitHub:</strong> <a href="https://github.com/CagatayTurunc/hizlipdf-lab">github.com/CagatayTurunc/hizlipdf-lab</a> · 
+            <strong>Ortam:</strong> Ubuntu 24.04 ARM64 (Linux 7.0.0-44-generic / 6.8.0)
+        </div>
+
+        <h2>1. Projenin Amacı ve Problem Tanımı</h2>
+        <p>
+            Modern ofis yazılımları (Word, LibreOffice, Adobe Acrobat, bulut PDF dönüştürücüler), işlevselliği artırmak için üçüncü parti eklenti paketlerine (plugin/add-on) izin verir. Ancak bu mimari, siber saldırganlar için kritik bir <strong>Tedarik Zinciri (Supply Chain)</strong> saldırı vektörü oluşturmaktadır.
+        </p>
+        <p>
+            Bu projede, kullanıcının talep ettiği DOCX belgesini analiz edip geçerli bir PDF üreten, ancak arka planda gizlice diski tarayarak görev dışı şirket sırlarını (bütçe dosyaları, kira sözleşmeleri) okuyup yerel ağdaki Komuta Kontrol (C2) dinleyicisine sızdıran <strong>Trojan (Truva Atı)</strong> davranışlı bir eklenti simüle edilmiştir.
+        </p>
+        <div class="highlight-box">
+            <strong>Temel Güvenlik Hedefi:</strong> Antivirüs yazılımlarının veya uygulama katmanı kontrollerinin yetersiz kaldığı bu senaryoda, Linux çekirdeğinin (Kernel) <strong>Bubblewrap Unprivileged User Namespaces</strong> teknolojisiyle sıfır ek yetki (non-root) ile hem dosya sistemini hem de ağ yığınını izole eden, sisteme sadece <strong>20 milisaniye</strong> yük getiren tam bir güvenlik mimarisi kurmaktır.
+        </div>
+
+        <h2>2. Geliştirme Sürecinde Yaşanan 7 Kritik Sistem Krizi ve Çözümleri</h2>
+        <div class="crisis-card">
+            <strong>1. UTM Sanal Makinesi Ekran Kartı Çökmesi (Display Crash):</strong>
+            <span>Çözüm: UTM sanallaştırma ayarlarından ekran kartı 'virtio-ramfb' olarak değiştirildi ve grafik arayüz stabil hale getirildi.</span>
+        </div>
+        <div class="crisis-card">
+            <strong>2. Ubuntu 24.04 AppArmor Unprivileged User Namespace Kısıtlaması:</strong>
+            <span>Çözüm: Ubuntu 24.04 çekirdeğinin getirdiği kısıtlama 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0' komutu ile aşılarak Bubblewrap'e unprivileged namespace açma izni verildi.</span>
+        </div>
+        <div class="crisis-card">
+            <strong>3. LibreOffice Headless Çökmesi (Signal 6 Abort):</strong>
+            <span>Çözüm: Sandbox içine '/etc/machine-id' ve '/etc/libreoffice' yolları bind-mount edilerek LibreOffice'in çekirdek sinyaliyle sonlanması önlendi.</span>
+        </div>
+        <div class="crisis-card">
+            <strong>4. LibreOffice Display / X11 Hatası (Can't open display: :0):</strong>
+            <span>Çözüm: SAL_USE_VCLPLUGIN=svp ortam değişkeni eklendi ve DISPLAY/WAYLAND_DISPLAY değişkenleri silinerek grafik sunucu bağımlılığı sıfırlandı.</span>
+        </div>
+        <div class="crisis-card">
+            <strong>5. GitHub Yetkilendirme ve VM Birleştirme Çakışmaları:</strong>
+            <span>Çözüm: Kişisel Erişim Jetonu (PAT) ile HTTPS yetkilendirmesi sağlandı. VM tarafında 'git fetch origin && git reset --hard origin/feature/plugin-install-analysis' tek komutluk dağıtım protokolü kuruldu.</span>
+        </div>
+        <div class="crisis-card">
+            <strong>6. JavaScript 'PROFILES is not defined' Hatası:</strong>
+            <span>Çözüm: web/app.js içerisine global PROFILES haritası eklenerek istemci tarafındaki referans hatası giderildi.</span>
+        </div>
+        <div class="crisis-card">
+            <strong>7. Firefox Content-Security-Policy (CSP) İnceleme Raporu Engeli:</strong>
+            <span>Çözüm: Sunucunun gönderdiği CSP güvenlik başlığına 'unsafe-inline' direktifi eklenerek adli bilişim raporundaki CSS stilleri ve baskı scriptleri aktif edildi.</span>
+        </div>
+
+        <h2>3. Sisteme Kazandırılan 5 Büyük Adli Bilişim & Güvenlik Yeteneği</h2>
+
+        <h3>[1] Bağımsız Linux Çekirdek Sistem Çağrısı Telemetrisi (Kernel Syscall Audit)</h3>
+        <p>Uygulama loglarının yanıltıcı olabileceği adli bilişim prensibinden yola çıkılarak, Linux çekirdeğinin sistem çağrıları <code>strace</code> ile dinlendi. <code>openat()</code> ile görev dışı dosya erişimleri ve <code>connect()</code> ile TCP soket bağlantıları dosya tanımlayıcısı seviyesinde karanlık temalı canlı bir terminalde kanıtlandı.</p>
+
+        <h3>[2] MITRE ATT&CK® Kurumsal Tehdit Matrisi Entegrasyonu</h3>
+        <p>Deneyler uluslararası siber güvenlik diliyle haritalandı: T1204.002 (Kullanıcı Tarafından Dosya Tetiklenmesi), T1059.006 (Python Yorumlayıcısı), T1005 (Yerel Sistemden Veri Toplama) ve T1041 (C2 Üzerinden Veri Sızdırma) taktikleri duruma göre dinamik 'İHLAL EDİLDİ' veya 'ENGELLENDİ' rozetleriyle gösterildi.</p>
+
+        <h3>[3] Tek Tıkla 4 Profil Otomatik Kıyaslama & Gecikme (Overhead) Analizi</h3>
+        <p>Tek butonla Profil A, B, C ve D ardışık olarak koşturulmakta, canlı ilerleme çubuğuyla birlikte sızan veri ve milisaniye cinsinden gecikme grafikleri üretilmektedir. Bubblewrap izolasyonunun yalnızca <strong>~20 ms</strong> ek yük getirdiği bilimsel olarak kanıtlanmıştır.</p>
+
+        <h3>[4] Canlı Ham Ağ Paketi ve Hex Dökümü İnceleyicisi (Wireshark Düzeyi)</h3>
+        <p>Alıcıya vuran HTTP istekleri başlıkları (Headers), JSON gövdesi ve 16 baytlık ofsetlerle <strong>Hexdump (ikili bayt)</strong> dökümü olarak listelenmektedir. Profil C ve D'de ağ kartının <code>connect() = -1 ENETUNREACH</code> ile reddedildiği paket seviyesinde ispatlanmaktadır.</p>
+
+        <h3>[5] İndirilebilir / Yazdırılabilir Resmi Adli Bilişim Kanıt Raporu</h3>
+        <p>Mahkeme veya jüri standartlarında; Linux çekirdek sürümü (<code>uname -r</code>), ARM64 mimarisi, girdi ve üretilen PDF'in <strong>SHA-256 Kriptografik Hash Tablosu</strong> ve adli tutanağı içeren A4 uyumlu resmi raporlama motoru entegre edildi.</p>
+
+        <h2>4. Güvenlik Profilleri ve İzolasyon Karşılaştırma Matrisi</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Profil</th>
+                    <th>Tanım</th>
+                    <th>Dosya İzni</th>
+                    <th>Ağ İzni</th>
+                    <th>Sızan Veri</th>
+                    <th>İşlem Süresi</th>
+                    <th>Güvenlik Skoru</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Profil A</strong></td>
+                    <td>Geniş Yetki (İzolesiz)</td>
+                    <td>AÇIK</td>
+                    <td>AÇIK</td>
+                    <td><span class="badge badge-danger">122 Bayt</span></td>
+                    <td>~920 ms</td>
+                    <td><span class="badge badge-danger">%0 (İHLAL)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Profil B</strong></td>
+                    <td>Dosya Kısıtlı</td>
+                    <td>KISITLI</td>
+                    <td>AÇIK</td>
+                    <td><span class="badge badge-success">0 Bayt</span></td>
+                    <td>~935 ms (+15ms)</td>
+                    <td><span class="badge badge-warning">%50 (KISMİ)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Profil C</strong></td>
+                    <td>Ağ Kısıtlı</td>
+                    <td>AÇIK</td>
+                    <td>KISITLI</td>
+                    <td><span class="badge badge-success">0 Bayt</span></td>
+                    <td>~915 ms (+0ms)</td>
+                    <td><span class="badge badge-warning">%50 (KISMİ)</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Profil D</strong></td>
+                    <td>Tam İzolasyon</td>
+                    <td>KISITLI</td>
+                    <td>KISITLI</td>
+                    <td><span class="badge badge-success">0 Bayt</span></td>
+                    <td>~945 ms (+25ms)</td>
+                    <td><span class="badge badge-success">%100 (TAM)</span></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>5. Akademik Savunma, Jüri ve Sunum Kılavuzu</h2>
+        <div class="qa-box">
+            <div class="qa-q">Hocanın Sorusu: "Peki bu güvenliğin işletim sistemine performans maliyeti (overhead) nedir?"</div>
+            <div class="qa-a"><strong>Yanıtınız:</strong> "Hocam, Benchmark panelimizde ölçtüğümüz üzere Bubblewrap'in sisteme getirdiği ek gecikme yalnızca 20-25 milisaniyedir. Ağır Docker konteynerleri veya sanal makineler saniyeler ve gigabaytlarca RAM tüketirken, Linux User Namespaces mimarisi doğrudan çekirdek seviyesinde çalıştığı için performans maliyeti sıfıra yakındır (%0-3)."</div>
+        </div>
+        <div class="qa-box">
+            <div class="qa-q">Hocanın Sorusu: "Ağın gerçekten engellendiğini nasıl kanıtlıyorsunuz?"</div>
+            <div class="qa-a"><strong>Yanıtınız:</strong> "Ağ Paketi İnceleyicimizde gördüğünüz gibi, Bubblewrap'in <code>--unshare-net</code> bayrağı süreci bağımsız bir network namespace'e hapsediyor. İşlem soket açmaya çalıştığında Linux çekirdeği <code>connect() = -1 ENETUNREACH</code> döndürerek soketi anında kesiyor ve dışarıya tek bir bayt dahi çıkamıyor."</div>
+        </div>
+        <div class="qa-box">
+            <div class="qa-q">Hocanın Sorusu: "Neden SHA-256 hash tablosu kullanıyorsunuz?"</div>
+            <div class="qa-a"><strong>Yanıtınız:</strong> "Adli bilişimde (Digital Forensics) delil zincirinin (Chain of Custody) bozulmadığını kanıtlamak şarttır. Raporumuzda girdi belgesinin, kurulan eklenti paketinin ve üretilen PDF'in SHA-256 kriptografik hash'lerini mühürleyerek dosyaların hiçbir manipülasyona uğramadığını matematiksel olarak ispatlıyoruz."</div>
+        </div>
+
+        <h2>6. Sonuç</h2>
+        <p>
+            Bu çalışma ile Linux işletim sistemlerinde modern belge analiz yazılımlarının güvenliği, çekirdek seviyesinde sistem çağrısı telemetrisi ve hafif (lightweight) konteyner izolasyonu ile başarıyla sağlanmış; akademik ve adli bilişim standartlarında eksiksiz bir savunma mimarisi ortaya konmuştur.
+        </p>
+    </div>
+</body>
+</html>
