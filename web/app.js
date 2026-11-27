@@ -93,6 +93,7 @@ function renderEvidence(data) {
   $('no-run').hidden = true; $('evidence-view').hidden = false;
   $('run-id').textContent = data.run_id; $('run-profile').textContent = `Profil ${data.profile} · ${data.plugin_manifest?.name || data.plugin} · v${data.plugin_manifest?.version || '0.1'}`;
   $('evidence-download').href = `/api/runs/${data.run_id}/evidence`;
+  if ($('forensic-report-btn')) $('forensic-report-btn').href = `/api/runs/${data.run_id}/report`;
   $('metric-pdf').textContent = data.pdf ? 'Hazır' : data.status === 'failed' ? 'Hata' : 'İşleniyor';
   $('metric-reads').textContent = data.metrics?.read_sources_worker_reported ?? '—';
   $('metric-sources').textContent = data.receiver.filter(e=>e.kind==='CONTENT').length;
