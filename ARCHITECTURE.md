@@ -62,13 +62,13 @@ Durumlar: `queued → running → completed|failed`. Aynı anda en fazla iki iş
 
 ## Güven ve kanıt sınırı
 
-1. İşçi dosyayı okuduğunu bildirir. Bu aşamada bağımsız OS gözlemi yoktur.
+1. İşçi dosyayı okuduğunu bildirir. Linux çalışmasında varsa `strace` kaydı sabit sentetik dosyaların `openat()` sonucunu ayrıca gösterir.
 2. Alıcı çalışma anahtarını, kaynak adını ve içeriğin `fixtures.py` ile birebir eşleşmesini doğrular. Bir kaynak/çalışma için tek kayıt kabul eder.
-3. `LAB_PING`, içerikten bağımsız bağlantı kontrolüdür; içerik baytına dahil edilmez.
+3. `LAB_PING`, işçiden yerel alıcıya bağlantı kontrolüdür ve içerik baytına dahil edilmez. Sunucu, alıcıyı çalışma öncesinde ve sonrasında kendi ağ ad alanından kontrol eder.
 4. Uygulama PDF'yi yeniden açar; sayfa sayısı ve metin alıntısını üretir. Yapısal geçerlilik ile içerik eşitliği ayrı tutulur.
-5. Tarayıcıya gönderilen bütün değişken metinler `textContent` ile işlenir; yerel servis Host/Origin kontrolü yapar ve dış arayüzde dinlemez.
+5. Panel alıcı görünümünü ve sistem çağrılarını metin olarak işler. Yerel servis Host/Origin kontrolü yapar ve dış arayüzde dinlemez.
 
-Receiver, işçiden bağımsızdır fakat uygulama servisiyle aynı güven sınırındadır. Ayrı makine alıcısı ve bağımsız OS denetimi sonraki Linux/gözlem aşamalarının kapsamıdır. Kısıt yokken yapay olarak “engellendi” sonucu üretilmez. Çevresel hata ile güvenlik politikası aynı şey değildir.
+Alıcı uygulama servisiyle aynı güven sınırındadır. `strace` işçi sürecini izler ve kaydı işçinin yazabildiği çalışma dizinine bırakır. Deney bu kaydı sabit eğitim işçisiyle toplar. İşçi dışında korunan bir denetim kaydı sonraki aşamanın kapsamındadır. Eksik gözlemde sonuç “Doğrulanmadı” olur.
 
 ## Eklenti yükleme sınırı
 

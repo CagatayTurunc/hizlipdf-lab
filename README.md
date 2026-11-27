@@ -6,7 +6,7 @@
 [![Bubblewrap](https://img.shields.io/badge/Isolation-Bubblewrap%20Namespaces-green)](https://github.com/containers/bubblewrap)
 [![MITRE ATT&CK](https://img.shields.io/badge/Security-MITRE%20ATT%26CK-red)](https://attack.mitre.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B%20%7C%203.12-yellow?logo=python)](https://python.org)
-[![Forensics](https://img.shields.io/badge/Audit-SHA--256%20Cryptographic%20Forensics-purple)](#5-resmi-adli-bilişim-kanıt-raporu-forensic-audit-report)
+[![Forensics](https://img.shields.io/badge/Audit-SHA--256%20Cryptographic%20Forensics-purple)](#5-yazdırılabilir-deney-raporu)
 
 Bu proje; modern ofis ve belge işleme yazılımlarında (Word, LibreOffice, bulut PDF dönüştürücüler) üçüncü parti eklentilerin oluşturduğu **Tedarik Zinciri (Supply Chain)** tehditlerini ve **Trojan (Truva Atı)** davranışlarını adli bilişim standartlarında simüle etmek; bu tehditleri Linux çekirdeği (Kernel) seviyesinde **Bubblewrap User Namespaces** teknolojisiyle sıfır ek yetkiyle (non-root) izole etmek amacıyla geliştirilmiş akademik bir siber güvenlik laboratuvarıdır.
 
@@ -15,8 +15,8 @@ Bu proje; modern ofis ve belge işleme yazılımlarında (Word, LibreOffice, bul
 ## 🎯 Projenin Temel Senaryosu ve Tehdit Modeli
 
 1. **Görünür Görev (Kullanıcının İstediği):** Kullanıcı bir `DOCX` belgesi yükler. Eklenti bu belgeyi analiz eder (kelime, tablo, başlık sayılarını çıkarır) ve geçerli bir `PDF` üretir.
-2. **Gizli Görev (Trojan Davranışı):** Eklenti normal dönüşümü yaparken arka planda gizlice diski tarar; görev dışı şirket sırlarını (`Sirket_Butcesi_TEST.csv` ve `Kira_Sozlesmesi_TEST.txt`) okur ve yerel ağdaki Komuta Kontrol (C2) dinleyicisine (`POST /collect`) sızdırır.
-3. **Çözüm (Çekirdek İzolasyonu):** Linux çekirdeğinin Mount, Network, PID ve IPC ad alanları kullanılarak eklenti hapsedilir. Sisteme yalnızca **~20 milisaniye** ek yükle veri sızıntısı **0 bayta** indirilir.
+2. **Ek deney adımı:** Eğitim paketi iki sabit sentetik dosyayı okumayı ve içeriği yalnızca yerel laboratuvar alıcısına iletmeyi dener.
+3. **Çekirdek izolasyonu:** Dört profil sentetik dosya bağlamalarını ve ağ ad alanını değiştirir. Deney, aynı belge işlenirken dosya açma ve alıcıya erişim sonuçlarını karşılaştırır.
 
 ---
 
@@ -56,76 +56,50 @@ Tarayıcınızı açın ve adrese gidin:
 
 ---
 
-## 🔥 Projede Geliştirilen 5 Büyük Güvenlik & Adli Bilişim Yeteneği
+## Deney kayıtları ve ölçüm
 
-Laboratuvar paneli, klasik web uygulamalarının çok ötesinde işletim sistemi çekirdeği ve adli bilişim derinliğine sahiptir:
+### 1. Linux sistem çağrısı kayıtları
 
-### 1. ⚙️ Linux Çekirdek Sistem Çağrısı Telemetrisi (Kernel Syscall Audit)
-* Uygulamanın beyanından bağımsız olarak, Linux çekirdeğinin sistem çağrıları `strace` ile denetlenir.
-* Eklentinin diskteki dosyalara erişimi `openat()` ve ağ soketi istekleri `connect()` seviyesinde yakalanır.
-* Dosya Tanımlayıcısı (FD = 3, FD = 5) seviyesinde `[İZİN VERİLDİ]` / `[ENGELLEME]` rozetleriyle koyu temalı terminal arayüzünde canlı olarak gösterilir.
+Linux'ta `strace` varsa panel, yalnızca iki sentetik dosya ve çalışmanın gerçek yerel alıcı adresiyle eşleşen `openat()` ve `connect()` kayıtlarını gösterir. Dosyanın açılması, işçinin bildirdiği içerik okumasından ayrı değerlendirilir. İlgili kayıt eksikse veya çalışma başarısızsa deney sonucu **Doğrulanmadı** olarak gösterilir.
 
-### 2. 🛡️ MITRE ATT&CK® Tehdit Matrisi Entegrasyonu
-* Simüle edilen zararlı davranışlar siber güvenlik dünyasının kurumsal standardı MITRE ATT&CK ile haritalanmıştır:
-  * **`T1204.002`**: User Execution - Malicious File
-  * **`T1059.006`**: Command & Scripting Interpreter: Python
-  * **`T1005`**: Data from Local System (Veri Toplama)
-  * **`T1041`**: Exfiltration Over C2 Channel (Veri Sızdırma)
-* Deney profiline göre ihlaller kırmızı `İHLAL EDİLDİ`, korumalar yeşil `ENGELLENDİ` rozetleriyle gösterilir.
+### 2. MITRE ATT&CK® eşlemesi
 
-### 3. 📈 Tek Tıkla 4 Profil Otomatik Kıyaslama ve Gecikme (Overhead) Analizi
-* Sol menüdeki **"📈 Karşılaştırma & Benchmark"** sekmesinden tek tıkla Profil A, B, C ve D ardışık olarak çalıştırılır.
-* Sızan veri (122 B vs 0 B) ve gecikme overhead'i (ms) CSS çubuk grafiklerine dökülür.
-* **Bilimsel Çıkarım:** Bubblewrap namespace izolasyonunun sisteme getirdiği ek maliyet yalnızca **~20 milisaniyedir (%0-3 overhead)**. Ağır sanal makineler veya Docker'a kıyasla neredeyse sıfır gecikmeyle tam güvenlik sağlanır.
+Deneyin dosya gözlemleri **T1005**, yerel alıcıdaki sentetik içerik kabulü ve bağlantı gözlemleri **T1041** kapsamında gösterilir. Rozetler ilgili kaydın sonucunu yansıtır.
 
-### 4. 🌐 Canlı Ham Ağ Paketi ve Hex Dökümü İnceleyicisi (Wireshark Seviyesi)
-* C2 dinleyicisine vuran paketler Wireshark / Burp Suite tarzı formatlı dökülür:
-  * **Formatlı HTTP:** `POST /collect HTTP/1.1`, Host, User-Agent, Content-Length ve çalınan JSON verisi.
-  * **Hex Dökümü (Hexdump):** 16 baytlık ofsetlerle çalınan şirket bütçesinin bellek seviyesindeki ikili (`00000000: 50 4f 53 54...`) gösterimi.
-* Profil C ve D'de soketin çekirdek seviyesinde `connect() = -1 ENETUNREACH` ile reddedildiği paket düzeyinde ispatlanır.
+### 3. Dört profilli karşılaştırma
 
-### 5. 📑 Resmi Adli Bilişim Kanıt Raporu (Forensic Audit Report)
-* Deney Gözlemcisi'ndeki **"📑 Adli Bilişim Raporu (.html / .pdf)"** butonu ile mahkeme ve jüri standartlarında resmi bir denetim tutanağı açılır.
-* Linux çekirdek sürümü (`uname -r`), `aarch64` (ARM64) mimarisi ve zaman damgası yer alır.
-* Girdi DOCX belgesinin, eklenti paketinin ve üretilen PDF'in **SHA-256 Kriptografik Hash Tablosu** mühürlenir.
-* Üstteki butonla tek tıkla resmi **A4 PDF** çıktısı alınabilir.
+**Karşılaştırma & Benchmark** görünümü aynı DOCX ve eğitim paketiyle dört profilde birer ısınma ve beşer ölçüm yapar. Her tur başlangıç profili değişir. Geçerli PDF üreten çalışmalar için toplam süre, dönüşüm ve işçinin ek deney adımının medyanı, minimum–maksimum aralığı ve örneklem sayısı görünür. Başarısız turlar çalışma kayıtlarında kalır. Alıcı ölçümleri kabul kaydı veya deney öncesi ve sonrası sağlık kontrolüyle desteklenir. A ile D arasındaki medyan farkı, iki profilin toplam çalışma süresini karşılaştırır.
 
----
+### 4. Alıcı tarafı HTTP kaydı
 
-## 📊 4 Güvenlik Profilinin Karşılaştırma Matrisi
+Alıcının kabul ettiği HTTP isteği, çalışma anahtarı çıkarılarak okunabilir biçimde yeniden oluşturulur. Hex dökümü bu görünümün ilk 512 baytını gösterir. Yerel alıcıya yönelik bağlantı hataları ayrı `strace` kayıtlarında görünür. Alıcıdaki sıfır kabul, tek başına ağ kısıtını doğrulamaya yetmez.
 
-| Profil | Profil Adı | Dosya İzni | Ağ İzni | Sızan Veri | İşlem Süresi | Güvenlik Skoru |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Profil A** | Geniş Yetki (İzolesiz) | AÇIK | AÇIK | **122 Bayt** | ~920 ms | **%0 (İHLAL)** |
-| **Profil B** | Dosya Kısıtlı | KISITLI | AÇIK | **0 Bayt** | ~935 ms (+15ms) | **%50 (Kısmi)** |
-| **Profil C** | Ağ Kısıtlı | AÇIK | KISITLI | **0 Bayt** | ~915 ms (+0ms) | **%50 (Kısmi)** |
-| **Profil D** | Tam İzolasyon | KISITLI | KISITLI | **0 Bayt** | ~945 ms (+25ms) | **%100 (TAM KORUMA)** |
+### 5. Yazdırılabilir deney raporu
 
----
+Deney gözlemcisindeki **Adli Bilişim Raporu (.html / .pdf)** bağlantısı çalışma ortamını, dosya özetlerini, gözlemleri ve kabul kayıtlarını gösterir. Üstteki düğme tarayıcının A4 PDF çıktısını açar. Ölçüm kayıtları ayrıca JSON olarak indirilebilir.
 
-## 🧪 Laboratuvarda Adım Adım Deney Yapma Rehberi
+## Profil yapılandırmaları
 
-1. **Eklentileri İnceleyin:** Sol menüden **"Eklentiler"** sekmesine gidin. `HızlıPDF · Normal referans` ve `HızlıPDF · Eğitim eklentisi (Trojan)` paketlerinin kurulu olduğunu görün.
-2. **Saldırıyı Simüle Edin:** Sol menüden **"Belge dönüştür"** sekmesine dönün.
-   - Örnek belgeyi seçin.
-   - Eklenti olarak: `HızlıPDF · Eğitim eklentisi` seçin.
-   - Profil olarak: `A · Geniş laboratuvar yetkisi` seçin ve **"PDF'ye dönüştür"**e basın.
-3. **Adli Kanıtları İnceleyin:**
-   - Sayfa otomatik olarak **"Deney gözlemcisi"**ne yönlenir.
-   - Aşağı inip **"Ağ Trafik İnceleyicisi"**nde çalınan bütçe verisini ve **Hex Dökümünü** görün.
-   - **Kernel Syscall** alanında `openat() = 3` (izin verildi) kayıtlarını inceleyin.
-4. **İzolasyonu Devreye Sokun:** Aynı eklentiyi **Profil D (Tam Kısıtlı)** ile çalıştırın.
-   - Sızan verinin **0 Bayt** olduğunu,
-   - Ağın `connect() = -1 ENETUNREACH` ile engellendiğini,
-   - Dosya erişiminin `ENOENT` ile kesildiğini görün!
-5. **Otomatik Benchmark:** Sol menüden **"📈 Karşılaştırma & Benchmark"** sekmesine geçip tek tıkla 4 profili kıyaslayın.
-6. **Resmi Rapor:** Deney gözlemcisinde sağ üstteki yeşil **"📑 Adli Bilişim Raporu (.html / .pdf)"** butonuna basarak resmi tutanağı inceleyin ve PDF olarak kaydedin!
+| Profil | Sentetik hedef dosyalar | Yerel ağ deneyi |
+| :--- | :--- | :--- |
+| **A · Geniş laboratuvar yetkisi** | Bağlanır | VM ağ ad alanını kullanır |
+| **B · Dosya erişimi dar** | Bağlanmaz | VM ağ ad alanını kullanır |
+| **C · Ağ bağlantısı kapalı** | Bağlanır | Ayrı ağ ad alanı |
+| **D · Dosya ve ağ kısıtlı** | Bağlanmaz | Ayrı ağ ad alanı |
+
+## Deneyi çalıştırma
+
+1. **Eklentiler** ekranından eğitim paketini kurun.
+2. **Belge dönüştür** ekranında örnek DOCX'i seçin ve Profil A altında PDF üretin.
+3. **Deney gözlemcisi** ekranında alıcı tarafı HTTP kaydını ve sistem çağrılarını inceleyin.
+4. Aynı dönüşümü Profil D'de çalıştırın. PDF durumunu, iki sentetik hedefe ilişkin dosya açma kayıtlarını ve yerel alıcıya bağlantı sonucunu karşılaştırın.
+5. Tekrarlı ölçüm için **Karşılaştırma & Benchmark** sekmesini açın. Rapor bağlantıları her profilin çalışma kayıtlarında bulunur.
 
 ---
 
 ## 📁 Proje Dokümantasyonu & Ek Kaynaklar
 
-* 📄 **[PROJE_KAPSAMLI_RAPORU.pdf](PROJE_KAPSAMLI_RAPORU.pdf)** — Projenin baştan sona tüm detaylarını, yaşanan krizleri ve jüri savunma metinlerini içeren 4 sayfalık resmi PDF bitirme raporu.
+* 📄 **[PROJE_KAPSAMLI_RAPORU.pdf](PROJE_KAPSAMLI_RAPORU.pdf)** — Projenin baştan sona tüm detaylarını, yaşanan krizleri ve jüri savunma metinlerini içeren PDF proje raporu ve deney yöntemi.
 * 🌐 **[PROJE_KAPSAMLI_RAPORU.html](PROJE_KAPSAMLI_RAPORU.html)** — Tarayıcıda açılabilen ve yazdırılabilen interaktif rapor versiyonu.
 * 🏗️ **[ARCHITECTURE.md](ARCHITECTURE.md)** — Sistem mimarisi ve bileşenler arası veri akışı.
 

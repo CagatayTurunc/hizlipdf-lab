@@ -1,12 +1,8 @@
 const $ = (id) => document.getElementById(id);
 let file = null, health = null, currentRun = null, busy = false, plugins = [], pluginBusy = false;
-const PROFILES = {
-  A: { name: 'Geniş laboratuvar yetkisi', files: true, network: true },
-  B: { name: 'Dosya erişimi dar', files: false, network: true },
-  C: { name: 'Ağ bağlantısı kapalı', files: true, network: false },
-  D: { name: 'Dosya ve ağ kısıtlı', files: false, network: false }
-};
-const names = {PROCESS_STARTED:'İşçi başladı',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Bağımsız bağlantı testi',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
+let benchmarkRunning = false;
+const syscallLabels = { allowed: 'BAŞARILI', error: 'HATA', pending: 'BAĞLANTI BEKLEMEDE' };
+const names = {PROCESS_STARTED:'İşçi başladı',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Yerel bağlantı testi',LAB_PROBE_FINISHED:'Ek deney adımı tamamlandı',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
 const results = {ok:'Başarılı (işçi)',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
 
 Object.assign(names,{PLUGIN_LOADED:'Kurulu paket yüklendi',PLUGIN_FAILED:'Paket yüklenemedi',ANALYSIS_FINISHED:'Belge analiz edildi'});
@@ -22,7 +18,7 @@ $('plugins-tab').onclick = $('manage-plugins').onclick = () => view('plugins');
 $('observer-tab').onclick = $('reveal-button').onclick = () => view('observer');
 $('benchmark-tab').onclick = () => view('benchmark');
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
-function refreshButton() { $('convert-button').disabled = busy || !file || !health?.converter || !$('plugin').value; }
+function refreshButton() { $('convert-button').disabled = busy || benchmarkRunning || !file || !health?.converter || !$('plugin').value; }
 $('plugin').onchange = refreshButton;
 function selectFile(next) {
   if (busy) return;
@@ -61,7 +57,7 @@ async function init() {
 }
 function base64File(selected) { return new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(Error('Dosya okunamadı.')); reader.readAsDataURL(selected); }); }
 $('convert-button').onclick = async () => {
-  if (busy || !file) return;
+  if (busy || benchmarkRunning || !file) return;
   busy = true; refreshButton(); error(''); document.body.classList.add('busy');
   $('sample-button').disabled = $('plugin').disabled = $('profile').disabled = $('file-input').disabled = true;
   $('output-empty').hidden = false; $('output-ready').hidden = true; $('pdf-preview').removeAttribute('src');
@@ -94,7 +90,10 @@ function renderEvidence(data) {
   $('run-id').textContent = data.run_id; $('run-profile').textContent = `Profil ${data.profile} · ${data.plugin_manifest?.name || data.plugin} · v${data.plugin_manifest?.version || '0.1'}`;
   $('evidence-download').href = `/api/runs/${data.run_id}/evidence`;
   if ($('forensic-report-btn')) $('forensic-report-btn').href = `/api/runs/${data.run_id}/report`;
-  $('metric-pdf').textContent = data.pdf ? 'Hazır' : data.status === 'failed' ? 'Hata' : 'İşleniyor';
+  $('run-verdict').textContent = data.verdict
+    ? `${data.verdict.label} · ${data.verdict.summary}`
+    : 'Doğrulanmadı · Deney kaydı henüz tamamlanmadı.';
+  $('metric-pdf').textContent = data.pdf && data.status === 'completed' ? 'Hazır' : data.status === 'failed' ? 'Hata' : 'İşleniyor';
   $('metric-reads').textContent = data.metrics?.read_sources_worker_reported ?? '—';
   $('metric-sources').textContent = data.receiver.filter(e=>e.kind==='CONTENT').length;
   $('metric-bytes').textContent = `${data.receiver.reduce((s,e)=>s+e.accepted_bytes,0)} B`;
@@ -104,74 +103,41 @@ function renderEvidence(data) {
   if (!reads.length) $('access-list').append(element('p',data.plugin==='normal' ? 'Normal eklenti: ek erişim denenmez.' : 'Okuma sonucu henüz yok.','empty-record'));
   for (const entry of reads) { const row = element('div',undefined,'access-row'); row.append(element('strong',entry.source)); row.append(element('span', entry.result==='ok' ? 'GÖREV DIŞI · Okundu (işçi bildirimi)' : `GÖREV DIŞI · ${entry.error || entry.result}`)); $('access-list').append(row); }
   $('receiver-list').replaceChildren();
-  if (data.receiver.some(e=>e.kind==='LAB_PING')) $('receiver-list').append(element('div','● LAB-PING kabul edildi · ağ yolu açık','ping'));
+  if (data.receiver.some(e=>e.kind==='LAB_PING')) $('receiver-list').append(element('div','● LAB-PING yerel alıcı tarafından kabul edildi','ping'));
   const contents = data.receiver.filter(e=>e.kind==='CONTENT');
   if (!contents.length) $('receiver-list').append(element('p','Görev dışı içerik kabul kaydı yok. Bu durum tek başına ağın engellendiğini kanıtlamaz.','empty-record'));
   for (const entry of contents) { const card = element('div',undefined,'receiver-record'); card.append(element('strong',entry.source)); card.append(element('pre',entry.content)); card.append(element('small',`${entry.accepted_bytes} bayt · Alıcı tarafından kabul edildi`)); $('receiver-list').append(card); }
-  const pktContainer = $('packet-inspector');
-  if (pktContainer) {
-    pktContainer.replaceChildren();
-    const netAudit = data.network_audit || {};
-    const packets = (data.receiver || []).filter(e => e.raw_http);
-    if (netAudit.status === 'blocked' || (data.profile && PROFILES[data.profile] && !PROFILES[data.profile].network)) {
-      const blockedCard = element('div', undefined, 'packet-card blocked-packet');
-      blockedCard.innerHTML = `
-        <div class="packet-header">
-          <span class="packet-method-badge blocked">AĞ ENGELLENDİ</span>
-          <span class="packet-uri">TCP / IP İletişimi Reddedildi</span>
-          <span class="packet-time">0 Paket · 0 Bayt</span>
-        </div>
-        <p class="packet-explain"><strong>Linux Network Namespace (--unshare-net)</strong> devrede olduğu için işlem ağ kartına (loopback dahil) erişememiş, işletim sistemi seviyesinde soket bağlantısı engellenmiştir.</p>
-        <pre class="packet-trace-pre">${netAudit.trace || 'socket(AF_INET, SOCK_STREAM) -> connect() = -1 ENETUNREACH'}</pre>
-      `;
-      pktContainer.append(blockedCard);
-    } else if (!packets.length) {
-      const noPkt = element('div', undefined, 'packet-card');
-      noPkt.innerHTML = `
-        <div class="packet-header">
-          <span class="packet-method-badge allowed">AĞ AÇIK</span>
-          <span class="packet-uri">İletişim Bekleniyor</span>
-        </div>
-        <p class="packet-explain">${data.plugin === 'normal' ? 'Normal referans eklentisi veri sızdırma teşebbüsünde bulunmadı.' : 'Herhangi bir HTTP isteği yakalanmadı.'}</p>
-        <pre class="packet-trace-pre">${netAudit.trace || 'socket(AF_INET, SOCK_STREAM) = 5 (Hazır)'}</pre>
-      `;
-      pktContainer.append(noPkt);
-    } else {
-      const title = element('h4', 'CANLI AĞ PAKETİ İNCELEYİCİSİ (RAW HTTP / HEX)', 'packet-section-title');
-      pktContainer.append(title);
-      packets.forEach((pkt, idx) => {
-        const card = element('div', undefined, 'packet-card');
-        const header = element('div', undefined, 'packet-header');
-        header.innerHTML = `
-          <span class="packet-method-badge allowed">POST</span>
-          <span class="packet-uri">/collect (${pkt.kind === 'LAB_PING' ? 'LAB_PING' : pkt.source})</span>
-          <div class="packet-tabs">
-            <button class="packet-tab-btn active" data-target="raw-${idx}">Formatlı HTTP</button>
-            <button class="packet-tab-btn" data-target="hex-${idx}">Hex Dökümü</button>
-          </div>
-        `;
-        const rawBox = element('pre', pkt.raw_http, 'packet-body-pre');
-        rawBox.id = `raw-${idx}`;
-        const hexBox = element('pre', pkt.hex_dump || 'Hexdump mevcut değil.', 'packet-body-pre hexdump-pre');
-        hexBox.id = `hex-${idx}`;
-        hexBox.hidden = true;
-        header.querySelectorAll('.packet-tab-btn').forEach(btn => {
-          btn.onclick = (e) => {
-            e.stopPropagation();
-            header.querySelectorAll('.packet-tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const target = btn.dataset.target;
-            rawBox.hidden = target !== `raw-${idx}`;
-            hexBox.hidden = target !== `hex-${idx}`;
-          };
-        });
-        card.append(header, rawBox, hexBox);
-        pktContainer.append(card);
-      });
-    }
+  const inspector = $('packet-inspector');
+  inspector.replaceChildren();
+  inspector.append(element('p', data.network_audit?.summary || 'Bağlantı sonucu doğrulanmadı.', 'small-note'));
+  const requests = data.receiver.filter(entry => entry.http_record);
+  if (requests.length) {
+    inspector.append(element('p', 'Görünüm kabul edilen istekten yeniden oluşturulur. Çalışma anahtarı çıkarılır. Hex dökümü bu görünümün ilk 512 baytını gösterir.', 'small-note'));
   }
-  if ($('metric-reads-sub')) {
-    $('metric-reads-sub').textContent = data.independent_file_observer ? '✓ Çekirdek (strace) ile doğrulandı' : 'İşçi bildirimi';
+  for (const request of requests) {
+    const card = element('section', undefined, 'packet-card');
+    const header = element('div', undefined, 'packet-header');
+    const tabs = element('div', undefined, 'packet-tabs');
+    const textButton = element('button', 'HTTP görünümü', 'packet-tab-btn active');
+    const hexButton = element('button', 'Hex dökümü', 'packet-tab-btn');
+    const http = element('pre', request.http_record, 'packet-body-pre');
+    const hex = element('pre', request.http_record_hex, 'packet-body-pre hexdump-pre');
+    function showHex(show) {
+      http.hidden = show;
+      hex.hidden = !show;
+      textButton.classList.toggle('active', !show);
+      hexButton.classList.toggle('active', show);
+      textButton.setAttribute('aria-pressed', String(!show));
+      hexButton.setAttribute('aria-pressed', String(show));
+    }
+    showHex(false);
+    textButton.onclick = () => showHex(false);
+    hexButton.onclick = () => showHex(true);
+    tabs.append(textButton, hexButton);
+    header.append(element('span', 'POST', 'packet-method-badge allowed'),
+      element('span', `/collect · ${request.source || request.kind}`, 'packet-uri'), tabs);
+    card.append(header, http, hex);
+    inspector.append(card);
   }
   const mitreGrid = $('mitre-grid');
   if (mitreGrid) {
@@ -202,11 +168,11 @@ function renderEvidence(data) {
     term.replaceChildren();
     const syscalls = data.syscalls || [];
     if (!syscalls.length) {
-      term.append(element('p', data.plugin === 'normal' ? 'Normal referans eklentisi: görev dışı sistem çağrısı yürütülmedi.' : 'Sistem çağrısı kaydı bulunamadı.', 'empty-record'));
+      term.append(element('p', 'İlgili sistem çağrısı kaydı bulunamadı.', 'empty-record'));
     } else {
       for (const call of syscalls) {
         const line = element('div', undefined, 'syscall-line');
-        const badge = element('span', call.status === 'allowed' ? 'İZİN VERİLDİ' : 'ENGELLEME', `syscall-badge ${call.status}`);
+        const badge = element('span', syscallLabels[call.status] || 'SONUÇ BELİRSİZ', `syscall-badge ${call.status}`);
         const text = element('span', call.raw, 'syscall-text');
         line.append(badge, text);
         term.append(line);
@@ -217,7 +183,7 @@ function renderEvidence(data) {
   for (const entry of data.events) { const tr = element('tr'); for (const value of [`${entry.elapsed_ms} ms`,names[entry.event]||entry.event,entry.source||'—',results[entry.result]||entry.result]) tr.append(element('td',value)); $('events').append(tr); }
   for (const entry of data.receiver) { const tr = element('tr'); for (const value of ['Alıcı',entry.kind==='LAB_PING'?'Bağlantı testi kabulü':'İçerik kabulü',entry.source||'LAB-PING','Bağımsız servis kaydı']) tr.append(element('td',value)); $('events').append(tr); }
   $('duration').textContent = data.total_ms ? `${data.total_ms} ms toplam` : 'Devam ediyor';
-  $('evidence-note').textContent = `${data.sandbox_applied ? 'Linux bubblewrap uygulandı.' : 'Bu çalışma OS izolasyonu olmadan yürütüldü.'} ${data.independent_file_observer ? 'Sistem çağrıları (openat/connect) Linux çekirdeği düzeyinde strace ile bağımsız gözlemlenip adli kanıt olarak kaydedilmiştir.' : 'Dosya okumaları işçi bildirimidir.'}`;
+  $('evidence-note').textContent = data.file_audit?.summary || 'Dosya açma sonucu doğrulanmadı.';
 }
 function renderAnalysis(analysis) {
   $('analysis-summary').replaceChildren();
@@ -268,164 +234,196 @@ async function pluginAction(action) {
 }
 $('plugin-upload-button').onclick=()=>$('plugin-file').click();
 $('plugin-file').onchange=(event)=>{ const selected=event.target.files[0]; if(selected) pluginAction(async()=>{await installBlob(selected); return 'Seçilen paket doğrulandı ve kuruldu.';}); event.target.value=''; };
-let benchmarkRunning = false;
+const benchmarkRepeats = 5;
+
+async function benchmarkTrial(profile, documentData) {
+  const { run_id: runId } = await json('/api/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...documentData, profile, plugin_id: 'hizlipdf.education' })
+  });
+  const deadline = Date.now() + 95000;
+  try {
+    while (Date.now() < deadline) {
+      const data = await json(`/api/runs/${runId}`, { signal: AbortSignal.timeout(5000) });
+      if (data.status === 'completed' || data.status === 'failed') return data;
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+    return { run_id: runId, status: 'unknown', error: 'Çalışma zamanında doğrulanamadı.' };
+  } catch (err) {
+    return { run_id: runId, status: 'unknown', error: err.message };
+  }
+}
+
 async function runBenchmark() {
-  if (benchmarkRunning) return;
+  if (benchmarkRunning || busy) return;
   benchmarkRunning = true;
+  refreshButton();
   $('run-benchmark-btn').disabled = true;
   $('benchmark-progress').hidden = false;
   $('benchmark-results').hidden = true;
 
+  function progress(done, count, status) {
+    const percent = Math.round(done * 100 / count);
+    $('benchmark-pct').textContent = `%${percent}`;
+    $('benchmark-bar-fill').style.width = `${percent}%`;
+    $('benchmark-status-text').textContent = status;
+  }
+
   try {
-    let sampleData = file;
-    if (!sampleData) {
-      $('benchmark-status-text').textContent = 'Örnek test belgesi hazırlanıyor...';
-      const resp = await fetch('/api/sample');
-      if (!resp.ok) throw Error('Örnek belge alınamadı.');
-      sampleData = new File([await resp.blob()], 'Musteri_Teklifi.docx');
+    progress(0, 1, 'Deney koşulları kontrol ediliyor…');
+    health = await json('/api/health');
+    if (!health.converter || !health.profiles.every(profile => profile.available)) {
+      throw Error('Dört profilin karşılaştırılması için LibreOffice ve çalışan Linux bubblewrap ortamı gerekli.');
+    }
+    const installed = (await json('/api/plugins')).plugins;
+    if (!installed.some(plugin => plugin.id === 'hizlipdf.education' && plugin.installed)) {
+      throw Error('Önce eğitim eklentisini kurun.');
     }
 
-    const base64 = await base64File(sampleData);
-    const profiles = [
-      { id: 'A', name: 'Profil A', desc: 'Geniş Yetki', color: 'danger' },
-      { id: 'B', name: 'Profil B', desc: 'Dosya Kısıtlı', color: 'warning' },
-      { id: 'C', name: 'Profil C', desc: 'Ağ Kısıtlı', color: 'warning' },
-      { id: 'D', name: 'Profil D', desc: 'Tam İzolasyon', color: 'success' },
-    ];
+    let sample = file;
+    if (!sample) {
+      const response = await fetch('/api/sample');
+      if (!response.ok) throw Error('Örnek belge alınamadı.');
+      sample = new File([await response.blob()], 'Musteri_Teklifi.docx');
+    }
+    const documentData = { filename: sample.name, content_base64: await base64File(sample) };
+    const profiles = health.profiles;
+    const trials = Object.fromEntries(profiles.map(profile => [profile.id, []]));
+    const total = profiles.length * (benchmarkRepeats + 1);
+    let done = 0;
 
-    const results = {};
-
-    for (let i = 0; i < profiles.length; i++) {
-      const p = profiles[i];
-      const pct = Math.round((i / profiles.length) * 100);
-      $('benchmark-pct').textContent = `${pct}%`;
-      $('benchmark-bar-fill').style.width = `${pct}%`;
-      $('benchmark-status-text').textContent = `${p.name} (${p.desc}) çalıştırılıyor ve çekirdek telemetrisi ölçülüyor...`;
-
-      const runResp = await json('/api/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          profile: p.id,
-          plugin_id: 'hizlipdf.education',
-          filename: sampleData.name,
-          content_base64: base64,
-        }),
-      });
-
-      const runId = runResp.run_id;
-      let runData = null;
-      while (true) {
-        await new Promise((r) => setTimeout(r, 350));
-        runData = await json(`/api/runs/${runId}`);
-        if (runData.status === 'completed' || runData.status === 'failed') break;
+    // Round 0 warms each profile. Rotate the starting profile on each measured round.
+    for (let round = 0; round <= benchmarkRepeats; round++) {
+      for (let offset = 0; offset < profiles.length; offset++) {
+        const profile = profiles[(round + offset) % profiles.length];
+        const phase = round === 0 ? 'Isınma' : `Tur ${round}/${benchmarkRepeats}`;
+        progress(done, total, `${phase} · Profil ${profile.id}`);
+        let data;
+        try {
+          data = await benchmarkTrial(profile.id, documentData);
+        } catch (err) {
+          data = { status: 'unknown', error: err.message };
+        }
+        trials[profile.id].push({ round, data });
+        done++;
       }
-      results[p.id] = runData;
     }
-
-    $('benchmark-pct').textContent = '100%';
-    $('benchmark-bar-fill').style.width = '100%';
-    $('benchmark-status-text').textContent = 'Tüm testler tamamlandı! Analiz grafikleri hazır.';
-
-    renderBenchmarkResults(profiles, results);
+    progress(done, total, 'Deney serisi tamamlandı.');
+    renderBenchmarkResults(profiles, trials);
   } catch (err) {
-    alert('Benchmark hatası: ' + err.message);
+    $('benchmark-status-text').textContent = err.message;
   } finally {
     benchmarkRunning = false;
     $('run-benchmark-btn').disabled = false;
+    refreshButton();
   }
 }
 
-function renderBenchmarkResults(profiles, results) {
-  const cols = $('benchmark-cols');
-  cols.replaceChildren();
+function measurement(values) {
+  const sorted = values.filter(value => Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  return { median, min: sorted[0], max: sorted.at(-1), count: sorted.length };
+}
+function measurementText(stats, unit) {
+  if (!stats) return 'Doğrulanmadı';
+  return `${stats.median} ${unit} · ${stats.min}–${stats.max} ${unit} · n=${stats.count}`;
+}
+function renderBenchmarkResults(profiles, trials) {
+  const cards = $('benchmark-cols');
+  cards.replaceChildren();
+  const summary = {};
+  for (const profile of profiles) {
+    const attempts = trials[profile.id];
+    const completed = attempts.filter(({round, data}) =>
+      round > 0 && data.status === 'completed' && data.pdf?.structurally_valid
+    ).map(({data}) => data);
+    const durations = completed.map(data => data.total_ms);
+    const bytes = completed.filter(data => data.receiver.length
+      || (data.receiver_health?.before && data.receiver_health?.after)
+    ).map(data => data.metrics?.accepted_bytes);
+    const total = measurement(durations);
+    const accepted = measurement(bytes);
+    const conversion = measurement(completed.map(data =>
+      data.events.find(event => event.event === 'CONVERSION_FINISHED' && event.result === 'ok')?.duration_ms
+    ));
+    const extra = measurement(completed.map(data =>
+      data.events.find(event => event.event === 'LAB_PROBE_FINISHED')?.duration_ms
+    ));
+    summary[profile.id] = { total, accepted };
 
-  const scores = { A: 0, B: 50, C: 50, D: 100 };
-  const baselineMs = results.A?.total_ms || 1;
-  const maxBytes = Math.max(1, ...profiles.map(p => results[p.id]?.metrics?.accepted_bytes || 0));
-  const maxMs = Math.max(...profiles.map(p => results[p.id]?.total_ms || 1));
-
-  for (const p of profiles) {
-    const data = results[p.id] || {};
-    const bytes = data.metrics?.accepted_bytes ?? 0;
-    const reads = data.metrics?.read_sources_worker_reported ?? 0;
-    const ms = data.total_ms || 0;
-    const score = scores[p.id];
-    const diffMs = ms - baselineMs;
-    const diffPct = Math.round((diffMs / baselineMs) * 100);
-
-    const card = element('div', undefined, `benchmark-col-card ${p.color}`);
-    card.innerHTML = `
-      <div class="benchmark-col-header">
-        <span class="benchmark-col-badge">${p.name}</span>
-        <span class="benchmark-col-score score-${p.color}">%${score} Koruma</span>
-      </div>
-      <h3 class="benchmark-col-title">${p.desc}</h3>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">Sızan Veri:</span>
-        <strong class="benchmark-metric-value ${bytes > 0 ? 'text-danger' : 'text-success'}">${bytes} Bayt</strong>
-      </div>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">Dosya Erişimi:</span>
-        <span class="benchmark-metric-value">${reads > 0 ? reads + ' dosya (İhlal)' : '0 dosya (Engellendi)'}</span>
-      </div>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">İşlem Süresi:</span>
-        <strong class="benchmark-metric-value">${ms} ms</strong>
-      </div>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">Ek Gecikme (Overhead):</span>
-        <span class="benchmark-metric-value">${p.id === 'A' ? 'Referans (Taban)' : (diffMs >= 0 ? `+${diffMs} ms (+%${diffPct})` : `${diffMs} ms`)}</span>
-      </div>
-      <div class="benchmark-security-bar-track">
-        <div class="benchmark-security-bar-fill fill-${p.color}" style="width: ${score}%"></div>
-      </div>
-    `;
-    cols.append(card);
+    const opened = completed.filter(data => data.file_audit?.status === 'opened').length;
+    const unavailableFiles = completed.filter(data => data.file_audit?.status === 'unavailable').length;
+    const reachable = completed.filter(data => data.network_audit?.status === 'reachable').length;
+    const unreachable = completed.filter(data => data.network_audit?.status === 'unreachable').length;
+    const card = element('section', undefined, 'benchmark-col-card');
+    card.append(element('span', `Profil ${profile.id}`, 'benchmark-col-badge'),
+      element('h3', profile.name, 'benchmark-col-title'));
+    const metrics = [
+      ['Geçerli PDF', `${completed.length}/${benchmarkRepeats}`],
+      ['Alıcının kabul ettiği içerik', measurementText(accepted, 'bayt')],
+      ['İki dosya için açma sonucu', `${opened} başarılı · ${unavailableFiles} başarısız · ${completed.length - opened - unavailableFiles} doğrulanmadı`],
+      ['Yerel alıcıya bağlantı', `${reachable} erişildi · ${unreachable} başarısız · ${completed.length - reachable - unreachable} doğrulanmadı`],
+      ['Toplam süre', measurementText(total, 'ms')],
+      ['PDF dönüşümü (işçi)', measurementText(conversion, 'ms')],
+      ['Ek deney adımı (işçi)', measurementText(extra, 'ms')]
+    ];
+    for (const [label, value] of metrics) {
+      const row = element('div', undefined, 'benchmark-metric-item');
+      row.append(element('span', label, 'benchmark-metric-label'), element('strong', value, 'benchmark-metric-value'));
+      card.append(row);
+    }
+    const details = element('details');
+    details.append(element('summary', 'Çalışma kayıtları'));
+    const list = element('ul');
+    for (const {round, data} of attempts) {
+      const label = round ? `Tur ${round}` : 'Isınma';
+      const item = element('li');
+      const status = data.verdict?.label || 'Doğrulanmadı';
+      if (data.run_id) {
+        const link = element('a', label, 'text-link');
+        link.href = `/api/runs/${data.run_id}/report`;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        item.append(link, ` · ${status}`);
+      } else {
+        item.textContent = `${label} · ${status}`;
+      }
+      if (data.error) item.append(` · ${data.error}`);
+      list.append(item);
+    }
+    details.append(list);
+    card.append(details);
+    cards.append(card);
   }
 
-  const leakChart = $('chart-data-leak');
-  leakChart.replaceChildren();
-  for (const p of profiles) {
-    const bytes = results[p.id]?.metrics?.accepted_bytes || 0;
-    const pct = Math.round((bytes / maxBytes) * 100);
-    const row = element('div', undefined, 'chart-row');
-    row.innerHTML = `
-      <div class="chart-row-label">${p.name} (${p.desc})</div>
-      <div class="chart-row-track">
-        <div class="chart-row-fill ${bytes > 0 ? 'fill-danger' : 'fill-success'}" style="width: ${Math.max(4, pct)}%"></div>
-      </div>
-      <div class="chart-row-value ${bytes > 0 ? 'text-danger' : 'text-success'}">${bytes} B</div>
-    `;
-    leakChart.append(row);
-  }
-
-  const latencyChart = $('chart-latency');
-  latencyChart.replaceChildren();
-  for (const p of profiles) {
-    const ms = results[p.id]?.total_ms || 0;
-    const pct = Math.round((ms / maxMs) * 100);
-    const diffMs = ms - baselineMs;
-    const row = element('div', undefined, 'chart-row');
-    row.innerHTML = `
-      <div class="chart-row-label">${p.name} (${p.desc})</div>
-      <div class="chart-row-track">
-        <div class="chart-row-fill fill-latency" style="width: ${pct}%"></div>
-      </div>
-      <div class="chart-row-value">${ms} ms ${p.id !== 'A' && diffMs > 0 ? `<small>(+${diffMs}ms)</small>` : ''}</div>
-    `;
-    latencyChart.append(row);
-  }
-
-  const overheadMs = Math.max(0, (results.D?.total_ms || 0) - baselineMs);
-  const overheadPct = Math.round((overheadMs / baselineMs) * 100);
-  $('overhead-summary-text').innerHTML = `
-    Bubblewrap hafif konteynerizasyonunun sisteme getirdiği ek gecikme maliyeti yalnızca <strong>~${overheadMs} ms (+%${overheadPct})</strong> seviyesindedir. 
-    Buna karşılık veri sızıntısını <strong>%100 oranında (0 bayt)</strong> engellemektedir. 
-    Bu deneysel sonuç, üretim ortamlarında tam izolasyonun ihmal edilebilir bir performans maliyetiyle maksimum koruma sağladığını kanıtlar.
-  `;
-
+  renderBenchmarkChart($('chart-data-leak'), profiles, summary, 'accepted', 'B');
+  renderBenchmarkChart($('chart-latency'), profiles, summary, 'total', 'ms');
+  const a = summary.A.total, d = summary.D.total;
+  $('overhead-summary-text').textContent = a?.count === benchmarkRepeats && d?.count === benchmarkRepeats
+    ? `D ile A arasındaki toplam süre medyanı farkı ${d.median - a.median} ms. Toplam süre, dosya hazırlığı, dönüşüm, ek deney adımı ve çıktı kontrolünü kapsar.`
+    : `A ile D arasındaki medyan farkı için iki profilde de ${benchmarkRepeats} geçerli ölçüm gerekiyor.`;
   $('benchmark-results').hidden = false;
 }
-if ($('run-benchmark-btn')) $('run-benchmark-btn').onclick = runBenchmark;
+
+function renderBenchmarkChart(container, profiles, summary, key, unit) {
+  container.replaceChildren();
+  const max = Math.max(1, ...profiles.map(profile => summary[profile.id][key]?.median ?? 0));
+  for (const profile of profiles) {
+    const stats = summary[profile.id][key];
+    const row = element('div', undefined, 'chart-row');
+    row.append(element('div', `Profil ${profile.id}`, 'chart-row-label'));
+    const track = element('div', undefined, 'chart-row-track');
+    if (stats) {
+      const fill = element('div', undefined, 'chart-row-fill fill-latency');
+      fill.style.width = `${stats.median * 100 / max}%`;
+      track.append(fill);
+    }
+    row.append(track, element('div', stats ? `${stats.median} ${unit}` : 'Doğrulanmadı', 'chart-row-value'));
+    container.append(row);
+  }
+}
+$('run-benchmark-btn').onclick = runBenchmark;
 init();

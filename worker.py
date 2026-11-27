@@ -77,6 +77,7 @@ def run(config):
         event("EXTRA_ACTIONS", "not_attempted")
         return 0
 
+    probe_start = time.monotonic()
     send("LAB_PING")
     for filename, expected in FILES.items():
         event("TASK_READ_ATTEMPT", "running", source=filename)
@@ -91,6 +92,7 @@ def run(config):
             send("CONTENT", filename, expected)
         except (OSError, UnicodeError) as exc:
             event("TASK_READ", "failed", source=filename, error=type(exc).__name__, detail=str(exc)[:180])
+    event("LAB_PROBE_FINISHED", "ok", duration_ms=round((time.monotonic() - probe_start) * 1000))
     return 0
 
 

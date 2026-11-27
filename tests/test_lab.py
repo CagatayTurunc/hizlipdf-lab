@@ -13,7 +13,8 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixtures import FILES
 from sandbox import command
-from server import Lab, sample_docx, validate_docx
+from observations import assess, read_syscalls
+from server import Lab, generate_forensic_html_report, make_hexdump, sample_docx, validate_docx
 from packages import build_package
 
 
@@ -35,6 +36,49 @@ class InputTests(unittest.TestCase):
     def test_unavailable_isolation_never_falls_back(self):
         with self.assertRaisesRegex(ValueError, "unavailable"):
             command({"profile": "D"}, Path("config"), Path("run"), Path("root"), False)
+
+
+class ObservationTests(unittest.TestCase):
+    def test_failed_or_missing_d_run_has_unverified_report(self):
+        failed = {"profile": "D", "plugin": "education", "status": "failed", "syscalls": []}
+        report = generate_forensic_html_report(failed)
+        self.assertIn("Doğrulanmadı", report)
+        for invented in ("TAM İZOLASYON", "ENETUNREACH", "POST /collect", "%100"):
+            self.assertNotIn(invented, report)
+        completed = {**failed, "status": "completed", "pdf": {"structurally_valid": True}}
+        self.assertIn("Doğrulanmadı", generate_forensic_html_report(completed))
+        self.assertEqual(assess({**completed, "profile": "A"}, True),
+                         assess(completed, True))
+
+    def test_only_completed_calls_for_current_targets_count(self):
+        prefix = '42 connect(5, {sa_family=AF_INET, sin_port=htons('
+        suffix = '), sin_addr=inet_addr("127.0.0.1")}, 16)'
+        names = list(FILES)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "trace.txt"
+            self.assertEqual(read_syscalls(path, 32123), [])
+            path.write_text("\n".join([
+                '42 openat(AT_FDCWD, "/lab/input.docx", O_RDONLY|O_CLOEXEC) = 5',
+                f'42 openat(AT_FDCWD, "/lab/targets/{names[0]}", O_RDONLY|O_CLOEXEC) = -1 ENOENT (Missing)',
+                f'[pid 42] openat(AT_FDCWD, "/lab/targets/{names[1]}", O_RDONLY|O_CLOEXEC <unfinished ...>',
+                '[pid 43] openat(AT_FDCWD, "/lib/test", O_RDONLY|O_CLOEXEC) = 5',
+                '[pid 42] <... openat resumed>) = -1 EACCES (Permission denied)',
+                prefix + "8765" + suffix + " = 0",
+                prefix + "32123" + suffix + " = -1 ENETUNREACH (Network is unreachable)",
+            ]), encoding="utf-8")
+            calls = read_syscalls(path, 32123)
+        self.assertEqual([call["source"] for call in calls], [*names, "127.0.0.1:32123"])
+        self.assertEqual([call["errno"] for call in calls], ["ENOENT", "EACCES", "ENETUNREACH"])
+
+        record = {"plugin": "education", "syscalls": calls, "receiver_health": {"before": True, "after": True}}
+        files, network, verdict = assess(record, True)
+        self.assertEqual(files["status"], "unavailable")
+        self.assertEqual(network["status"], "unreachable")
+        self.assertEqual(verdict["status"], "observed")
+        self.assertEqual(assess({**record, "syscalls": calls[:1]}, True)[0]["status"], "unverified")
+        self.assertEqual(assess({**record, "receiver_health": {"before": True}}, True)[1]["status"], "unverified")
+        self.assertEqual(assess({**record, "receiver": [{"kind": "LAB_PING"}]}, True)[1]["status"], "reachable")
+        self.assertEqual(assess(record, False)[2]["status"], "unverified")
 
 
 class LabTests(unittest.TestCase):
@@ -73,6 +117,13 @@ class LabTests(unittest.TestCase):
             self.post_receiver(payload)
         self.assertEqual(len(record["receiver"]), 1)
         self.assertNotIn("token", self.lab.view("test"))
+        entry, = record["receiver"]
+        headers, body = entry["http_record"].split("\r\n\r\n", 1)
+        self.assertIn(f"Content-Length: {len(body.encode('utf-8'))}", headers)
+        self.assertNotIn("token", json.loads(body))
+        self.assertEqual(entry["http_record_hex"], make_hexdump(entry["http_record"].encode("utf-8")))
+        self.assertTrue(self.lab.receiver_ready())
+
 
     def test_api_layer_refuses_unsupported_profile(self):
         self.lab.sandbox = {"available": False, "reason": "test"}
@@ -120,6 +171,11 @@ class LabTests(unittest.TestCase):
         self.assertEqual(len([x for x in education["receiver"] if x["kind"] == "LAB_PING"]), 1)
         self.assertFalse(education["sandbox_applied"])
         self.assertFalse(education["independent_file_observer"])
+        self.assertEqual(education["syscalls"], [])
+        self.assertEqual(education["verdict"]["status"], "unverified")
+        self.assertEqual(education["network_audit"]["status"], "reachable")
+        self.assertEqual(normal["verdict"]["status"], "not_attempted")
+        self.assertEqual(education["receiver_health"], {"before": True, "after": True})
 
     def test_uninstall_during_run_keeps_snapshot_but_rejects_next_run(self):
         self.lab.sandbox = {"available": False, "reason": "Native baseline test"}

@@ -17,12 +17,14 @@ import threading
 import time
 import uuid
 import zipfile
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from docx import Document
 from pypdf import PdfReader
 from fixtures import FILES
+from observations import assess, mitre_mapping, read_syscalls
 from sandbox import PROFILES, capability, command
 from packages import PluginStore, build_package
 
@@ -93,8 +95,9 @@ def generate_forensic_html_report(record):
     pdf_sha = hashes.get("pdf_sha256") or pdf_info.get("sha256", "Üretilmedi / Yok")
     pdf_pages = pdf_info.get("pages", 0)
     pdf_bytes = pdf_info.get("bytes", 0)
-    total_ms = record.get("total_ms", 0)
-    status = record.get("status", "completed")
+    total_ms = record.get("total_ms")
+    duration = f"{total_ms} ms" if total_ms is not None else "—"
+    status = record.get("status", "unknown")
     started_at = sys_info.get("timestamp") or time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.get("started_at", time.time())))
     kernel = sys_info.get("kernel") or platform.release()
     machine = sys_info.get("machine") or platform.machine()
@@ -103,21 +106,14 @@ def generate_forensic_html_report(record):
 
     file_ok = prof_data.get("files", True)
     net_ok = prof_data.get("network", True)
-    exfil_bytes = record.get("metrics", {}).get("accepted_bytes", 0)
-    exfil_sources = record.get("metrics", {}).get("accepted_sources", 0)
-
-    if profile == "A":
-        verdict_badge = '<span class="status-badge status-danger">GÜVENLİK İHLALİ TESPİT EDİLDİ</span>'
-        verdict_text = "Geniş yetkili profil altında çalıştırılan eklentinin görev dışı hassas şirket verilerine (şirket bütçesi, kira sözleşmesi) yetkisiz eriştiği ve Linux soket arayüzü üzerinden yerel alıcıya (C2 simülasyonu) aktardığı adli bilişim incelemesiyle tespit edilmiştir. Sistem seviyesinde çekirdek izolasyonu uygulanmadığı için sistem ihlale açık kalmıştır."
-    elif profile == "B":
-        verdict_badge = '<span class="status-badge status-warning">KISMİ KORUMA (DOSYA İZOLASYONU)</span>'
-        verdict_text = "Linux Mount Namespace yalıtımı başarıyla uygulanmış, görev dışı dosyalara erişim çekirdek düzeyinde 'ENOENT' ile engellenmiştir. Ağ yolu açık olmasına rağmen sızdırılacak veri elde edilemediğinden dışarıya 0 bayt veri sızmıştır."
-    elif profile == "C":
-        verdict_badge = '<span class="status-badge status-warning">KISMİ KORUMA (AĞ İZOLASYONU)</span>'
-        verdict_text = "Eklenti yerel dosyalara erişebilmiş ancak Linux Network Namespace (--unshare-net) sayesinde işlem ağ arayüzlerinden izole edilmiş, TCP soket bağlantısı çekirdek düzeyinde 'ENETUNREACH' ile anında engellenmiştir. Dışarıya 0 bayt veri sızmıştır."
-    else:
-        verdict_badge = '<span class="status-badge status-success">TAM İZOLASYON (ÇİFT KATMANLI SAVUNMA)</span>'
-        verdict_text = "Linux Bubblewrap yalıtımı hem dosya sistemi (Mount Namespace) hem de ağ yığını (--unshare-net) üzerinde eksiksiz çalışmıştır. Eklenti ne yerel dosyalara erişebilmiş ne de ağa paket gönderebilmiştir. Güvenlik skoru %100 olup sıfır sızıntı ile tam yalıtım sağlanmıştır."
+    receiver = record.get("receiver") or []
+    contents = [item for item in receiver if item["kind"] == "CONTENT"]
+    accepted_bytes = sum(item["accepted_bytes"] for item in contents)
+    _, network_audit, verdict = assess(
+        record, status == "completed" and pdf_info.get("structurally_valid")
+    )
+    verdict_cls = "status-neutral" if verdict["status"] != "observed" else "status-success"
+    syscall_labels = {"allowed": "BAŞARILI", "error": "HATA", "pending": "BAĞLANTI BEKLEMEDE"}
 
     mitre_rows = []
     for m in record.get("mitre_matrix", []):
@@ -129,17 +125,16 @@ def generate_forensic_html_report(record):
             <td><code class="code-pill">{html.escape(m.get('technique_id',''))}</code></td>
             <td><strong>{html.escape(m.get('name',''))}</strong><br><span class="muted">{html.escape(m.get('tactic',''))}</span></td>
             <td><span class="status-badge {cls}">{html.escape(st_label)}</span></td>
-            <td><span class="mitigation-tag">{html.escape(m.get('mitigation',''))}</span></td>
             <td><span class="detail-cell">{html.escape(m.get('detail',''))}</span></td>
         </tr>""")
-    mitre_tbody = "".join(mitre_rows) or "<tr><td colspan='5' class='empty'>Kayıt bulunamadı.</td></tr>"
+    mitre_tbody = "".join(mitre_rows) or "<tr><td colspan='4' class='empty'>Kayıt bulunamadı.</td></tr>"
 
     syscall_rows = []
     for sc in record.get("syscalls", []):
         raw = html.escape(sc.get("raw", ""))
-        st = sc.get("status", "allowed")
-        b_cls = "status-success" if st == "allowed" else "status-danger"
-        b_txt = "İZİN VERİLDİ" if st == "allowed" else "ENGELLEME"
+        st = sc.get("status")
+        b_cls = "status-success" if st == "allowed" else "status-neutral"
+        b_txt = syscall_labels.get(st, "SONUÇ BELİRSİZ")
         syscall_rows.append(f"""
         <div class="syscall-row">
             <span class="status-badge {b_cls}">{b_txt}</span>
@@ -147,56 +142,30 @@ def generate_forensic_html_report(record):
         </div>""")
     syscall_body = "".join(syscall_rows) or "<div class='empty'>Çekirdek sistem çağrısı kaydı bulunamadı.</div>"
 
-    net_audit = record.get("network_audit") or {}
-    packets = record.get("receiver") or []
-    content_packets = [p for p in packets if p.get("raw_http")]
-
-    packet_cards = []
-    if net_audit.get("status") == "blocked" or not net_ok:
-        packet_cards.append(f"""
-        <div class="packet-item blocked">
-            <div class="packet-item-header">
-                <span class="status-badge status-danger">AĞ ENGELLENDİ</span>
-                <strong>Linux Network Namespace (--unshare-net)</strong>
-                <span class="packet-meta">0 Paket · 0 Bayt Sızıntı</span>
-            </div>
-            <p class="packet-desc">İşlem soyutlanmış ağ ad alanında koşturulduğu için Linux soket bağlantısı çekirdek düzeyinde reddedilmiştir.</p>
-            <pre class="terminal-pre">{html.escape(net_audit.get("trace", "connect() = -1 ENETUNREACH (Network is unreachable)"))}</pre>
-        </div>""")
-    elif not content_packets:
-        packet_cards.append(f"""
+    http_cards = []
+    for request in receiver:
+        if not request.get("http_record"):
+            continue
+        source = html.escape(request.get("source") or request["kind"])
+        http_cards.append(f"""
         <div class="packet-item">
             <div class="packet-item-header">
-                <span class="status-badge status-success">AĞ AÇIK</span>
-                <strong>Zararlı İstek Gözlemlenmedi</strong>
-                <span class="packet-meta">0 Bayt</span>
+                <span class="status-badge status-neutral">POST /collect</span>
+                <strong>{source}</strong>
+                <span class="packet-meta">{request["accepted_bytes"]} içerik baytı</span>
             </div>
-            <pre class="terminal-pre">{html.escape(net_audit.get("trace", "socket(AF_INET, SOCK_STREAM) = 5"))}</pre>
+            <div class="packet-duo">
+                <div>
+                    <div class="pre-header">Yeniden oluşturulan HTTP görünümü</div>
+                    <pre class="terminal-pre http-code">{html.escape(request["http_record"])}</pre>
+                </div>
+                <div>
+                    <div class="pre-header">Bu görünümün hex dökümü</div>
+                    <pre class="terminal-pre hex-code">{html.escape(request["http_record_hex"])}</pre>
+                </div>
+            </div>
         </div>""")
-    else:
-        for idx, pkt in enumerate(content_packets):
-            raw_box = html.escape(pkt.get("raw_http", ""))
-            hex_box = html.escape(pkt.get("hex_dump", ""))
-            src = html.escape(pkt.get("source") or pkt.get("kind", "Bilinmeyen"))
-            packet_cards.append(f"""
-            <div class="packet-item">
-                <div class="packet-item-header">
-                    <span class="status-badge status-danger">POST /collect</span>
-                    <strong>Sızdırılan Kaynak: {src}</strong>
-                    <span class="packet-meta">{pkt.get('accepted_bytes', 0)} Bayt</span>
-                </div>
-                <div class="packet-duo">
-                    <div>
-                        <div class="pre-header">Formatlı HTTP İsteği:</div>
-                        <pre class="terminal-pre http-code">{raw_box}</pre>
-                    </div>
-                    <div>
-                        <div class="pre-header">Hex Dökümü (Hexdump):</div>
-                        <pre class="terminal-pre hex-code">{hex_box}</pre>
-                    </div>
-                </div>
-            </div>""")
-    packets_body = "".join(packet_cards)
+    http_body = "".join(http_cards) or "<p>Alıcı tarafı HTTP kaydı yok.</p>"
 
     return f"""<!DOCTYPE html>
 <html lang="tr">
@@ -466,7 +435,7 @@ def generate_forensic_html_report(record):
     <div class="report-container">
         <div class="top-toolbar no-print">
             <div style="font-weight: 600; font-size: 12px; color: #334155;">
-                ⚖️ Resmi Adli Bilişim Denetim Raporu Görüntüleyicisi
+                ⚖️ HızlıPDF Deney Raporu
             </div>
             <div style="display: flex; gap: 10px;">
                 <button class="toolbar-btn" onclick="window.print()">🖨️ Raporu Yazdır / PDF Olarak Kaydet</button>
@@ -477,10 +446,10 @@ def generate_forensic_html_report(record):
 
         <div class="report-header">
             <div class="report-title">
-                <p>T.C. Siber Güvenlik ve Adli Bilişim Araştırma Laboratuvarı</p>
+                <p>HızlıPDF · İşletim Sistemleri Güvenliği Laboratuvarı</p>
                 <h1>ADLİ BİLİŞİM VE ÇEKİRDEK İZOLASYON DENETİM RAPORU</h1>
                 <div style="font-size: 11px; color: #475569; margin-top: 4px;">
-                    Protokol: <code>HIZLIPDF-FORENSIC-AUDIT-v2</code> · Durum: <strong>{status.upper()}</strong>
+                    Protokol: <code>HIZLIPDF-FORENSIC-AUDIT-v3</code> · Durum: <strong>{status.upper()}</strong>
                 </div>
             </div>
             <div class="report-stamp">
@@ -494,11 +463,11 @@ def generate_forensic_html_report(record):
         <div class="grid-3">
             <div class="info-box">
                 <span>İşletim Sistemi & Çekirdek (uname -r)</span>
-                <strong>Linux {kernel}</strong>
+                <strong>{html.escape(sys_info.get("system", platform.system()))} {html.escape(kernel)}</strong>
             </div>
             <div class="info-box">
                 <span>İşlemci / Donanım Mimarisi</span>
-                <strong>{machine} (ARM64)</strong>
+                <strong>{html.escape(machine)}</strong>
             </div>
             <div class="info-box">
                 <span>Platform & Python Sürümü</span>
@@ -508,7 +477,7 @@ def generate_forensic_html_report(record):
         </div>
         <div class="grid-2" style="margin-top: 12px;">
             <div class="info-box">
-                <span>Test Edilen Güvenlik Profili</span>
+                <span>Seçilen Güvenlik Profili ve Ayarları</span>
                 <strong>Profil {profile} · {prof_name}</strong>
                 <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">
                     Dosya İzni: <strong>{'AÇIK' if file_ok else 'KISITLI'}</strong> · Ağ İzni: <strong>{'AÇIK' if net_ok else 'KISITLI'}</strong>
@@ -516,14 +485,14 @@ def generate_forensic_html_report(record):
             </div>
             <div class="info-box">
                 <span>Yalıtım ve Güvenlik Motoru</span>
-                <strong>Linux Bubblewrap (bwrap) User Namespaces</strong>
+                <strong>{("Linux Bubblewrap" if record.get("sandbox_applied") else "Bubblewrap kaydı yok")}</strong>
                 <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">
-                    PID / IPC / UTS / Mount / Net Namespaces
+                    Yürütme ortamı
                 </div>
             </div>
         </div>
 
-        <div class="section-title">🔐 2. Kriptografik Delil Bütünlüğü ve Hash Doğrulama (SHA-256)</div>
+        <div class="section-title">🔐 2. Dosya Özetleri (SHA-256)</div>
         <table>
             <thead>
                 <tr>
@@ -535,35 +504,34 @@ def generate_forensic_html_report(record):
             </thead>
             <tbody>
                 <tr>
-                    <td><strong>{filename}</strong></td>
+                    <td><strong>{html.escape(filename)}</strong></td>
                     <td>Girdi Belgesi (DOCX)</td>
                     <td><code>{input_sha}</code></td>
-                    <td><span class="status-badge status-success">DOĞRULANDI ✓</span></td>
+                    <td>{"Özet kaydedildi" if hashes.get("input_sha256") else "Kayıt yok"}</td>
                 </tr>
                 <tr>
-                    <td><strong>{plugin_name} (v{plugin_ver})</strong></td>
+                    <td><strong>{html.escape(plugin_name)} (v{html.escape(plugin_ver)})</strong></td>
                     <td>Kurulu Eklenti Paketi (ZIP)</td>
                     <td><code>{package_sha}</code></td>
-                    <td><span class="status-badge status-success">MÜHÜRLENDİ ✓</span></td>
+                    <td>{"Özet kaydedildi" if hashes.get("package_sha256") or record.get("package_sha256") else "Kayıt yok"}</td>
                 </tr>
                 <tr>
                     <td><strong>input.pdf</strong></td>
                     <td>Üretilen PDF ({pdf_pages} Sayfa · {pdf_bytes} B)</td>
                     <td><code>{pdf_sha}</code></td>
-                    <td><span class="status-badge status-success">MÜHÜRLENDİ ✓</span></td>
+                    <td>{"Özet kaydedildi" if pdf_info.get("sha256") else "Kayıt yok"}</td>
                 </tr>
             </tbody>
         </table>
 
-        <div class="section-title">🛡️ 3. MITRE ATT&CK® Tehdit Matrisi ve Güvenlik Sınırları</div>
+        <div class="section-title">🛡️ 3. MITRE ATT&CK® Eşlemesi</div>
         <table>
             <thead>
                 <tr>
                     <th>Teknik Kodu</th>
                     <th>Teknik & Taktik</th>
                     <th>Güvenlik Durumu</th>
-                    <th>Uygulanan Savunma</th>
-                    <th>Adli Açıklama</th>
+                    <th>Gözlem</th>
                 </tr>
             </thead>
             <tbody>
@@ -571,47 +539,37 @@ def generate_forensic_html_report(record):
             </tbody>
         </table>
 
-        <div class="section-title">⚙️ 4. Bağımsız Linux Çekirdek Sistem Çağrısı Telemetrisi (Kernel Syscall Audit)</div>
+        <div class="section-title">⚙️ 4. Linux Sistem Çağrısı Kayıtları</div>
         <p style="font-size: 11px; color: var(--muted); margin: 0 0 10px;">
-            İşçi uygulamasının beyanından bağımsız olarak, <code>strace</code> ile Linux çekirdeğinin <code>openat()</code> ve <code>connect()</code> seviyesinde yakalanan adli bilişim kayıtları:
+            Sentetik hedeflere ve bu çalışmanın yerel alıcısına ilişkin <code>strace</code> kayıtları. <code>openat()</code> dosyanın açılma sonucunu gösterir.
         </p>
         <div class="syscall-container">
             {syscall_body}
         </div>
 
-        <div class="section-title">🌐 5. Ağ İletişimi ve Ham Paket Adli İncelemesi (Network Packet Audit)</div>
+        <div class="section-title">🌐 5. Alıcı Tarafı HTTP Kaydı</div>
         <div class="grid-2" style="margin-bottom: 14px;">
             <div class="info-box">
-                <span>Toplam Sızdırılan Veri (Accepted Payload)</span>
-                <strong style="color: {'#dc2626' if exfil_bytes > 0 else '#16a34a'}; font-size: 16px;">{exfil_bytes} Bayt</strong>
+                <span>Alıcının Kabul Ettiği Sentetik İçerik</span>
+                <strong style="color: #475569; font-size: 16px;">{accepted_bytes} bayt</strong>
             </div>
             <div class="info-box">
                 <span>Alıcıya Ulaşan Görev Dışı Kaynak Sayısı</span>
-                <strong style="font-size: 16px;">{exfil_sources} Adet</strong>
+                <strong style="font-size: 16px;">{len(contents)}</strong>
             </div>
         </div>
-        {packets_body}
+        <p>{html.escape(network_audit["summary"])}</p>
+        <p>Görünüm kabul edilen istekten yeniden oluşturulur. Çalışma anahtarı çıkarılır ve hex dökümü bu görünümün ilk 512 baytını gösterir.</p>
+        {http_body}
 
-        <div class="section-title">⚖️ 6. Adli Bilişim Uzmanı Nihai Kanaati & Onay Bloğu</div>
+        <div class="section-title">⚖️ 6. Deney Değerlendirmesi</div>
         <div class="verdict-box">
             <div class="verdict-header">
-                {verdict_badge}
+                <span class="status-badge {verdict_cls}">{html.escape(verdict["label"])}</span>
                 <strong style="font-size: 13px;">Protokol Değerlendirme Kararı</strong>
-                <span style="margin-left: auto; font-size: 11px; color: var(--muted);">İşlem Süresi: {total_ms} ms</span>
+                <span style="margin-left: auto; font-size: 11px; color: var(--muted);">Toplam süre · {duration}</span>
             </div>
-            <p class="verdict-p">{verdict_text}</p>
-            <div class="signature-grid">
-                <div class="sig-block">
-                    <div class="sig-line"></div>
-                    <div class="sig-title">İncelemeyi Yapan Adli Bilişim Uzmanı</div>
-                    <div style="font-size: 11px; color: #475569;">Siber Güvenlik & İşletim Sistemleri Araştırmacısı</div>
-                </div>
-                <div class="sig-block">
-                    <div class="sig-line"></div>
-                    <div class="sig-title">Elektronik Mühür & Doğrulama</div>
-                    <div style="font-size: 11px; color: #16a34a; font-weight: 700;">✓ SHA-256 İLE KRİPTOGRAFİK OLARAK İMZALANDI</div>
-                </div>
-            </div>
+            <p class="verdict-p">{html.escape(verdict["summary"])}</p>
         </div>
     </div>
 </body>
@@ -640,6 +598,12 @@ class Lab:
         class Receiver(BaseHTTPRequestHandler):
             def log_message(self, *_):
                 pass
+
+            def do_GET(self):
+                if self.path != "/healthz":
+                    return self.send_error(404)
+                self.send_response(204)
+                self.end_headers()
 
             def do_POST(self):
                 try:
@@ -670,22 +634,20 @@ class Lab:
                         # One ping and one content record per source/run, no duplicate inflation.
                         if any(e["kind"] == kind and e["source"] == source for e in record["receiver"]):
                             raise ValueError("Duplicate record")
-                        headers_dict = {
-                            "Host": f"127.0.0.1:{lab.receiver.server_port}",
-                            "User-Agent": self.headers.get("User-Agent") or "HizliPDF-Worker/0.2.0 (Linux)",
-                            "Content-Type": self.headers.get("Content-Type") or "application/json",
-                            "Content-Length": str(size)
-                        }
-                        header_str = "\r\n".join(f"{k}: {v}" for k, v in headers_dict.items())
-                        clean_item = {k: v for k, v in item.items() if k != "token"}
-                        raw_http = f"POST /collect HTTP/1.1\r\n{header_str}\r\n\r\n{json.dumps(clean_item, ensure_ascii=False, indent=2)}"
-                        raw_bytes = f"POST /collect HTTP/1.1\r\n{header_str}\r\n\r\n{json.dumps(clean_item, ensure_ascii=False)}".encode("utf-8")
+                        body = json.dumps({
+                            "run_id": record["run_id"], "kind": kind, "source": source, "content": content
+                        }, ensure_ascii=False, indent=2)
+                        encoded_body = body.encode("utf-8")
+                        headers = {"Content-Type": "application/json", "Content-Length": str(len(encoded_body))}
+                        header_lines = "\r\n".join(f"{name}: {value}" for name, value in headers.items())
+                        http_record = f"POST /collect {self.request_version}\r\n{header_lines}\r\n\r\n{body}"
                         record["receiver"].append({
                             "kind": kind, "source": source, "content": content,
                             "accepted_bytes": len(content.encode()), "evidence_source": "receiver",
                             "received_at": time.time(), "run_id": record["run_id"],
-                            "raw_http": raw_http, "hex_dump": make_hexdump(raw_bytes),
-                            "headers": headers_dict
+                            "http_record": http_record,
+                            "http_record_hex": make_hexdump(http_record.encode("utf-8")),
+                            "received_body_bytes": len(raw_body),
                         })
                     self.send_response(200)
                     self.send_header("Content-Length", "2")
@@ -694,6 +656,16 @@ class Lab:
                 except (ValueError, TypeError, KeyError, AttributeError):
                     self.send_error(400, "Rejected laboratory record")
         return Receiver
+
+    def receiver_ready(self):
+        connection = HTTPConnection("127.0.0.1", self.receiver.server_port, timeout=1)
+        try:
+            connection.request("GET", "/healthz")
+            return connection.getresponse().status == 204
+        except (OSError, HTTPException):
+            return False
+        finally:
+            connection.close()
 
     def health(self):
         return {"application_version": "0.2.0", "system": __import__("platform").system(), "converter": bool(self.soffice),
@@ -726,9 +698,10 @@ class Lab:
         input_sha256 = hashlib.sha256(data).hexdigest()
         record = {"run_id": run_id, "profile": profile, "plugin": plugin, "filename": Path(filename).name,
                   "status": "queued", "token": secrets.token_hex(24), "receiver": [], "events": [],
-                  "started_at": time.time(), "sandbox_applied": self.sandbox["available"],
+                  "started_at": time.time(), "sandbox_requested": self.sandbox["available"],
+                  "sandbox_applied": False,
                   "independent_file_observer": False, "pdf": None, "analysis": None,
-                  "syscalls": [], "mitre_matrix": [], "network_audit": None,
+                  "syscalls": [], "mitre_matrix": [], "file_audit": None, "network_audit": None, "verdict": None,
                   "plugin_manifest": info["manifest"], "package_sha256": info["sha256"],
                   "input_sha256": input_sha256,
                   "hashes": {
@@ -757,9 +730,11 @@ class Lab:
             return json.loads(json.dumps({k: v for k, v in record.items() if k != "token"}))
 
     def execute(self, record, data, package_data):
+        run_probe = record["plugin"] == "education"
+        ready_before = self.receiver_ready() if run_probe else None
         start = time.monotonic()
         folder = self.data / record["run_id"]
-        proc = None
+        sandboxed = record["sandbox_requested"]
         outcome = "failed"
         try:
             folder.mkdir()
@@ -769,7 +744,6 @@ class Lab:
             (folder / "plugin.zip").write_bytes(package_data)
             for name, content in FILES.items():
                 (folder / "targets" / name).write_text(content, encoding="utf-8")
-            sandboxed = record["sandbox_applied"]
             config = {"run_id": record["run_id"], "token": record["token"], "profile": record["profile"],
                       "plugin": record["plugin"], "sandbox": sandboxed,
                       "plugin_id": record["plugin_manifest"]["id"], "package_sha256": record["package_sha256"],
@@ -803,6 +777,9 @@ class Lab:
                 except json.JSONDecodeError:
                     pass
             record["events"] = events
+            record["sandbox_applied"] = sandboxed and any(
+                event.get("event") == "PROCESS_STARTED" and event.get("sandbox") is True for event in events
+            )
             if proc.returncode:
                 detail = next((e.get("detail") for e in reversed(events) if e.get("result") == "failed"), None)
                 raise RuntimeError(detail or stderr[-600:] or "Dönüştürme işçisi başarısız.")
@@ -821,119 +798,41 @@ class Lab:
                              "url": f"/api/runs/{record['run_id']}/pdf"}
             record["analysis"] = json.loads((folder / "output/analysis.json").read_text(encoding="utf-8"))
             record["analysis"]["evidence_source"] = "worker"
-            syscalls = []
-            log_path = folder / "output" / "syscalls.log"
-            if log_path.is_file():
-                try:
-                    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                        line = line.strip()
-                        if any(t in line for t in ("Sirket_Butcesi", "Kira_Sozlesmesi", "targets")) or \
-                           ("connect(" in line and ("8765" in line or "127.0.0.1" in line or "AF_INET" in line)):
-                            is_ok = ("= 3" in line or "= 4" in line or "= 0" in line or ("=" in line and "= -" not in line))
-                            syscalls.append({"raw": line, "status": "allowed" if is_ok else "blocked"})
-                except Exception:
-                    pass
-            if not syscalls and record["plugin"] == "education":
-                p = proc.pid if proc else 4102
-                file_ok = PROFILES[record["profile"]]["files"]
-                net_ok = PROFILES[record["profile"]]["network"]
-                ret1 = "= 3" if file_ok else "= -1 ENOENT (No such file or directory)"
-                syscalls.append({
-                    "raw": f"[{p}] openat(AT_FDCWD, \"/lab/targets/Sirket_Butcesi_TEST.csv\", O_RDONLY|O_CLOEXEC) {ret1}",
-                    "status": "allowed" if file_ok else "blocked"
-                })
-                ret2 = "= 4" if file_ok else "= -1 ENOENT (No such file or directory)"
-                syscalls.append({
-                    "raw": f"[{p}] openat(AT_FDCWD, \"/lab/targets/Kira_Sozlesmesi_TEST.txt\", O_RDONLY|O_CLOEXEC) {ret2}",
-                    "status": "allowed" if file_ok else "blocked"
-                })
-                ret_net = "= 0 (Success)" if net_ok else "= -1 ENETUNREACH (Network is unreachable)"
-                syscalls.append({
-                    "raw": f"[{p}] connect(5, {{sa_family=AF_INET, sin_port=htons(8765), sin_addr=inet_addr(\"127.0.0.1\")}}, 16) {ret_net}",
-                    "status": "allowed" if net_ok else "blocked"
-                })
-            record["syscalls"] = syscalls
-            record["independent_file_observer"] = bool(sandboxed and syscalls)
-            file_ok = PROFILES[record["profile"]]["files"]
-            net_ok = PROFILES[record["profile"]]["network"]
-            is_edu = record["plugin"] == "education"
-            exfil_count = len([e for e in record["receiver"] if e.get("kind") == "CONTENT"])
-            record["mitre_matrix"] = [
-                {
-                    "technique_id": "T1204.002",
-                    "tactic": "Execution (TA0002)",
-                    "name": "User Execution: Malicious File",
-                    "detail": "Kullanıcı DOCX belgesi yüklediğinde analiz işlevi adı altında eklenti kodu tetiklendi.",
-                    "status": "violated",
-                    "status_label": "TETİKLENDİ",
-                    "mitigation": "Uygulama İçi İnceleme"
-                },
-                {
-                    "technique_id": "T1059.006",
-                    "tactic": "Execution (TA0002)",
-                    "name": "Command & Scripting Interpreter: Python",
-                    "detail": "İşçi süreci sistem Python yorumlayıcısı ile bağımsız sandbox namespace'inde koşturuldu.",
-                    "status": "violated",
-                    "status_label": "ÇALIŞTIRILDI",
-                    "mitigation": "Unshare PID/IPC/UTS"
-                },
-                {
-                    "technique_id": "T1005",
-                    "tactic": "Collection (TA0009)",
-                    "name": "Data from Local System",
-                    "detail": "Görev dışı şirket bütçesi ve kira sözleşmesi sentetik dosyalarına erişim denemesi." if is_edu else "Normal eklenti: Görev dışı yerel dosyalara erişim denemesi yapılmadı.",
-                    "status": "violated" if (is_edu and file_ok) else "blocked",
-                    "status_label": ("İHLAL EDİLDİ" if file_ok else "ENGELLENDİ") if is_edu else "GÖZLEMLENMEDİ",
-                    "mitigation": "Bubblewrap Mount Namespace (B & D)" if not file_ok else "Yetki Denetimi Yok (A & C)"
-                },
-                {
-                    "technique_id": "T1041",
-                    "tactic": "Exfiltration (TA0010)",
-                    "name": "Exfiltration Over C2 Channel",
-                    "detail": "Toplanan sentetik verilerin yerel HTTP alıcı servisine (127.0.0.1:8765/collect) sızdırılma girişimi." if is_edu else "Normal eklenti: Komuta kontrol veri aktarımı denenmedi.",
-                    "status": "violated" if (is_edu and net_ok and exfil_count > 0) else ("blocked" if (is_edu and not net_ok) else "neutral"),
-                    "status_label": ("İHLAL EDİLDİ" if (net_ok and exfil_count > 0) else ("AĞ AÇIK / VERİ YOK" if net_ok else "ENGELLENDİ")) if is_edu else "GÖZLEMLENMEDİ",
-                    "mitigation": "Bubblewrap --unshare-net Namespace (C & D)" if not net_ok else "Ağ İletişimi Serbest (A & B)"
-                }
-            ]
-            if not net_ok:
-                record["network_audit"] = {
-                    "status": "blocked",
-                    "summary": "Linux Network Namespace (--unshare-net) devrede; soket çekirdek düzeyinde engellendi.",
-                    "trace": f"socket(AF_INET, SOCK_STREAM, IPPROTO_IP) = 5\nconnect(5, {{sa_family=AF_INET, sin_port={self.receiver.server_port}, sin_addr=inet_addr(\"127.0.0.1\")}}, 16) = -1 ENETUNREACH (Network is unreachable)",
-                    "packets_captured": 0,
-                    "packets": []
-                }
-            else:
-                record["network_audit"] = {
-                    "status": "allowed",
-                    "summary": "Ağ iletişimi açık (kısıtlamasız); HTTP POST paketleri yerel alıcıya iletildi.",
-                    "trace": f"socket(AF_INET, SOCK_STREAM, IPPROTO_IP) = 5\nconnect(5, {{sa_family=AF_INET, sin_port={self.receiver.server_port}, sin_addr=inet_addr(\"127.0.0.1\")}}, 16) = 0 (Success)",
-                    "packets_captured": len(record["receiver"]),
-                    "packets": record["receiver"]
-                }
             outcome = "completed"
         except Exception as exc:
             record["error"] = str(exc)[:800]
         finally:
-            record["total_ms"] = round((time.monotonic() - start) * 1000)
-            contents = [e for e in record["receiver"] if e["kind"] == "CONTENT"]
-            record["metrics"] = {"read_sources_worker_reported": len({e.get("source") for e in record["events"]
-                                  if e.get("event") == "TASK_READ" and e.get("result") == "ok"}),
-                                  "accepted_sources": len(contents),
-                                  "accepted_bytes": sum(e["accepted_bytes"] for e in contents)}
-            # Evidence exports exclude the per-run receiver credential.
-            try:
-                if folder.exists():
-                    (folder / "config.json").unlink(missing_ok=True)
-                    snapshot = self.view(record["run_id"])
-                    snapshot["status"] = outcome
-                    (folder / "evidence.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
-            except OSError as exc:
-                record["evidence_save_error"] = str(exc)[:200]
-            finally:
-                record["status"] = outcome
-                self.slots.release()
+            total_ms = round((time.monotonic() - start) * 1000)
+            controls = {"before": ready_before, "after": self.receiver_ready() if run_probe else None}
+            calls = []
+            if sandboxed:
+                calls = read_syscalls(folder / "output" / "syscalls.log", self.receiver.server_port)
+            with self.lock:
+                record["total_ms"] = total_ms
+                record["syscalls"] = calls
+                record["independent_file_observer"] = any(call["kind"] == "openat" for call in calls)
+                record["receiver_health"] = controls
+                contents = [e for e in record["receiver"] if e["kind"] == "CONTENT"]
+                record["metrics"] = {
+                    "read_sources_worker_reported": len({e.get("source") for e in record["events"]
+                                                         if e.get("event") == "TASK_READ" and e.get("result") == "ok"}),
+                    "accepted_sources": len(contents),
+                    "accepted_bytes": sum(e["accepted_bytes"] for e in contents),
+                }
+                record["file_audit"], record["network_audit"], record["verdict"] = assess(record, outcome == "completed")
+                record["mitre_matrix"] = mitre_mapping(record["file_audit"], record["network_audit"], contents)
+                # Evidence exports exclude the per-run receiver credential.
+                try:
+                    if folder.exists():
+                        (folder / "config.json").unlink(missing_ok=True)
+                        snapshot = self.view(record["run_id"])
+                        snapshot["status"] = outcome
+                        (folder / "evidence.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
+                except OSError as exc:
+                    record["evidence_save_error"] = str(exc)[:200]
+                finally:
+                    record["status"] = outcome
+                    self.slots.release()
 
 
 def app_handler(lab):
