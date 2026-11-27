@@ -1,5 +1,11 @@
 const $ = (id) => document.getElementById(id);
 let file = null, health = null, currentRun = null, busy = false, plugins = [], pluginBusy = false;
+const PROFILES = {
+  A: { name: 'Geniş laboratuvar yetkisi', files: true, network: true },
+  B: { name: 'Dosya erişimi dar', files: false, network: true },
+  C: { name: 'Ağ bağlantısı kapalı', files: true, network: false },
+  D: { name: 'Dosya ve ağ kısıtlı', files: false, network: false }
+};
 const names = {PROCESS_STARTED:'İşçi başladı',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Bağımsız bağlantı testi',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
 const results = {ok:'Başarılı (işçi)',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
 
