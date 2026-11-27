@@ -1,4 +1,3 @@
-import base64
 import io
 import json
 from pathlib import Path
@@ -14,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixtures import FILES
 from sandbox import command
 from observations import assess, read_syscalls
-from server import Lab, generate_forensic_html_report, make_hexdump, sample_docx, validate_docx
+from server import Lab, check_sample_pdf, generate_forensic_html_report, make_hexdump, sample_docx, validate_docx
 from packages import build_package
 
 
@@ -32,6 +31,16 @@ class InputTests(unittest.TestCase):
             archive.writestr("word/document.xml", "x" * (33 * 1024 * 1024))
         with self.assertRaisesRegex(ValueError, "sınır"):
             validate_docx(stream.getvalue())
+
+    def test_sample_pdf_checks_row_value_and_page_count(self):
+        text = "MaviRota Danışmanlık\nMüşteri Teklifi\nBelge analizi 12.000\nRaporlama 8.000\nToplam 20.000"
+        self.assertTrue(check_sample_pdf(text, 1)["passed"])
+
+        wrong_total = text.replace("Toplam 20.000", "Toplam 120.000")
+        checks = check_sample_pdf(wrong_total, 2)
+        self.assertFalse(checks["passed"])
+        failures = {check["label"]: check["actual"] for check in checks["checks"] if not check["matched"]}
+        self.assertEqual(failures, {"Sayfa sayısı": 2, "Toplam": "120.000"})
 
     def test_unavailable_isolation_never_falls_back(self):
         with self.assertRaisesRegex(ValueError, "unavailable"):
@@ -131,12 +140,25 @@ class LabTests(unittest.TestCase):
             self.lab.create({"profile": "B", "plugin": "education"})
         self.assertEqual(self.lab.runs, {})
 
+    def test_view_reads_complete_worker_events_during_run(self):
+        folder = Path(self.temp.name) / "demo"
+        folder.mkdir()
+        event_path = folder / "worker-events.jsonl"
+        started = {"event": "CONVERSION_STARTED", "result": "running"}
+        finished = {"event": "CONVERSION_FINISHED", "result": "ok"}
+        self.lab.runs["demo"] = {"status": "running", "events": [], "token": "secret"}
+        event_path.write_text(json.dumps(started) + "\n" + json.dumps(finished), encoding="utf-8")
+        self.assertEqual(self.lab.view("demo")["events"], [started])
+        with event_path.open("a", encoding="utf-8") as stream:
+            stream.write("\n")
+        self.assertEqual(self.lab.view("demo")["events"], [started, finished])
+        self.assertNotIn("token", self.lab.view("demo"))
+
     def run_conversion(self, plugin, profile="A", uninstall_after_start=False):
         if not self.lab.soffice:
             self.skipTest("LibreOffice yok; gerçek dönüşüm testi atlandı.")
         installed = self.lab.plugins.install(build_package("hizlipdf." + plugin))
-        run_id = self.lab.create({"filename": "Musteri_Teklifi.docx", "profile": profile, "plugin": plugin,
-                                  "content_base64": base64.b64encode(sample_docx()).decode()})
+        run_id = self.lab.create({"sample": True, "profile": profile, "plugin": plugin})
         if uninstall_after_start:
             self.lab.plugins.uninstall("hizlipdf." + plugin)
         deadline = time.monotonic() + 85
@@ -147,6 +169,12 @@ class LabTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(result["status"], "completed", result.get("error"))
         self.assertEqual(result["pdf"]["pages"], 1)
+        self.assertTrue(result["pdf"]["sample_validation"]["passed"], result["pdf"]["sample_validation"])
+        self.assertEqual(len(result["pdf"]["sample_validation"]["checks"]), 6)
+        if self.lab.preview_renderer:
+            preview = Path(self.temp.name) / run_id / "output/sample-preview.png"
+            self.assertEqual(preview.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(result["pdf"]["preview_url"], f"/api/runs/{run_id}/preview")
         self.assertIn("20.000", result["pdf"]["text_excerpt"])
         self.assertIn("Müşteri Teklifi", result["pdf"]["text_excerpt"])
         self.assertNotIn("LAB-BUTCE", result["pdf"]["text_excerpt"])
@@ -165,6 +193,7 @@ class LabTests(unittest.TestCase):
         education = self.run_conversion("education")
         self.assertEqual(normal["pdf"]["text_excerpt"], education["pdf"]["text_excerpt"])
         self.assertEqual(normal["analysis"], education["analysis"])
+        self.assertEqual(normal["input_sha256"], education["input_sha256"])
         self.assertEqual(normal["receiver"], [])
         self.assertEqual(education["metrics"]["accepted_sources"], 2)
         self.assertEqual(education["metrics"]["accepted_bytes"], sum(len(x.encode()) for x in FILES.values()))

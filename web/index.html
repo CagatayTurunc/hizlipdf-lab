@@ -9,6 +9,7 @@
     <button class="nav active" id="user-tab"><span>▤</span> Belge dönüştür</button>
     <button class="nav" id="plugins-tab"><span>◈</span> Eklentiler</button>
     <button class="nav" id="observer-tab"><span>◉</span> Deney gözlemcisi</button>
+    <button class="nav" id="comparison-tab"><span>▥</span> Canlı karşılaştırma</button>
     <button class="nav" id="benchmark-tab"><span>📈</span> Karşılaştırma & Benchmark</button>
     <div class="sidebar-bottom"><span class="status-dot"></span> Yerel eğitim laboratuvarı<p>Yalnızca sentetik veriler.<br>Gerçek dönüşüm, görünür kanıt.</p></div>
   </aside>
@@ -64,6 +65,47 @@
         <section class="card events-card"><div class="card-top"><h2>Olay akışı</h2><span class="muted" id="duration"></span></div><div class="table-scroll"><table><thead><tr><th>Süre</th><th>Olay</th><th>Kaynak</th><th>Sonuç</th></tr></thead><tbody id="events"></tbody></table></div></section>
         <div class="lab-note" id="evidence-note"></div>
       </div>
+    </section>
+    <section class="view" id="comparison-view" hidden>
+      <h1>Aynı belge, iki güvenlik profili.</h1>
+      <p class="intro">Müşteri teklifini aynı eğitim eklentisiyle A ve D profillerinde PDF’ye dönüştürün. Sistem çağrısı ve alıcı kayıtlarını iki çıktı üzerinde karşılaştırın.</p>
+      <section class="card comparison-start">
+        <div>
+          <h2>Musteri_Teklifi.docx</h2>
+          <p class="small-note">Yerleşik örnek belge · Üç tutar, iki başlık ve sayfa sayısı kontrol edilir.</p>
+        </div>
+        <button class="primary" id="run-comparison-btn">A ve D’yi karşılaştır <span aria-hidden="true">→</span></button>
+        <p id="comparison-status" class="comparison-status" role="status" hidden></p>
+      </section>
+      <div id="comparison-results" hidden>
+        <p id="comparison-summary" class="comparison-summary" role="status"></p>
+        <div id="comparison-runs" class="comparison-runs"></div>
+      </div>
+      <template id="comparison-card">
+        <section class="card comparison-card">
+          <div class="comparison-card-head">
+            <span class="comparison-profile" data-profile></span>
+            <h2 data-name></h2>
+            <span class="comparison-badge" data-status data-tone="idle"></span>
+          </div>
+          <div class="comparison-document">
+            <p class="comparison-pdf-empty" data-pdf-empty>PDF hazırlanıyor…</p>
+            <div class="comparison-page" data-page hidden><img data-preview></div>
+            <div class="comparison-pdf-text" data-pdf-text hidden>
+              <strong>PDF’den çıkarılan metin</strong><pre></pre>
+            </div>
+            <a class="text-link" data-pdf-link target="_blank" rel="noopener" hidden>PDF’yi aç ↗</a>
+            <ul class="comparison-checks" data-checks hidden></ul>
+          </div>
+          <ol class="comparison-steps" aria-label="Çalışma kanıtları">
+            <li><details data-step="pdf"><summary><span>PDF çıktısı</span><small data-stage></small></summary><div data-detail></div></details></li>
+            <li><details data-step="files"><summary><span>Dosya açma sonucu</span><small data-stage></small></summary><div data-detail></div></details></li>
+            <li><details data-step="network"><summary><span>Yerel alıcıya bağlantı</span><small data-stage></small></summary><div data-detail></div></details></li>
+            <li><details data-step="receiver"><summary><span>Alıcı kaydı</span><small data-stage></small></summary><div data-detail></div></details></li>
+          </ol>
+          <a class="text-link" data-report target="_blank" rel="noopener" hidden>Çalışma raporunu aç ↗</a>
+        </section>
+      </template>
     </section>
     <section class="view" id="benchmark-view" hidden>
       <div class="eyebrow">AKADEMİK DEĞERLENDİRME & BENCHMARK</div>

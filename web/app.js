@@ -1,13 +1,13 @@
 const $ = (id) => document.getElementById(id);
 let file = null, health = null, currentRun = null, busy = false, plugins = [], pluginBusy = false;
-let benchmarkRunning = false;
+let benchmarkRunning = false, comparisonRunning = false;
 const syscallLabels = { allowed: 'BAŞARILI', error: 'HATA', pending: 'BAĞLANTI BEKLEMEDE' };
 const names = {PROCESS_STARTED:'İşçi başladı',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Yerel bağlantı testi',LAB_PROBE_FINISHED:'Ek deney adımı tamamlandı',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
 const results = {ok:'Başarılı (işçi)',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
 
 Object.assign(names,{PLUGIN_LOADED:'Kurulu paket yüklendi',PLUGIN_FAILED:'Paket yüklenemedi',ANALYSIS_FINISHED:'Belge analiz edildi'});
 function view(name) {
-  for (const key of ['user','plugins','observer','benchmark']) {
+  for (const key of ['user','plugins','observer','comparison','benchmark']) {
     const el = $(key+'-view'), tab = $(key+'-tab');
     if (el) el.hidden = key !== name;
     if (tab) tab.classList.toggle('active', key === name);
@@ -17,8 +17,13 @@ $('user-tab').onclick = () => view('user');
 $('plugins-tab').onclick = $('manage-plugins').onclick = () => view('plugins');
 $('observer-tab').onclick = $('reveal-button').onclick = () => view('observer');
 $('benchmark-tab').onclick = () => view('benchmark');
+$('comparison-tab').onclick = () => view('comparison');
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
-function refreshButton() { $('convert-button').disabled = busy || benchmarkRunning || !file || !health?.converter || !$('plugin').value; }
+function refreshButton() {
+  const active = busy || benchmarkRunning || comparisonRunning;
+  $('convert-button').disabled = active || !file || !health?.converter || !$('plugin').value;
+  $('run-comparison-btn').disabled = $('run-benchmark-btn').disabled = active;
+}
 $('plugin').onchange = refreshButton;
 function selectFile(next) {
   if (busy) return;
@@ -57,7 +62,7 @@ async function init() {
 }
 function base64File(selected) { return new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(Error('Dosya okunamadı.')); reader.readAsDataURL(selected); }); }
 $('convert-button').onclick = async () => {
-  if (busy || benchmarkRunning || !file) return;
+  if (busy || benchmarkRunning || comparisonRunning || !file) return;
   busy = true; refreshButton(); error(''); document.body.classList.add('busy');
   $('sample-button').disabled = $('plugin').disabled = $('profile').disabled = $('file-input').disabled = true;
   $('output-empty').hidden = false; $('output-ready').hidden = true; $('pdf-preview').removeAttribute('src');
@@ -236,9 +241,10 @@ $('plugin-upload-button').onclick=()=>$('plugin-file').click();
 $('plugin-file').onchange=(event)=>{ const selected=event.target.files[0]; if(selected) pluginAction(async()=>{await installBlob(selected); return 'Seçilen paket doğrulandı ve kuruldu.';}); event.target.value=''; };
 const benchmarkRepeats = 5;
 
-async function benchmarkTrial(profile, documentData) {
+async function educationTrial(profile, documentData, onUpdate) {
   const { run_id: runId } = await json('/api/runs', {
     method: 'POST',
+    signal: AbortSignal.timeout(10000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...documentData, profile, plugin_id: 'hizlipdf.education' })
   });
@@ -246,6 +252,7 @@ async function benchmarkTrial(profile, documentData) {
   try {
     while (Date.now() < deadline) {
       const data = await json(`/api/runs/${runId}`, { signal: AbortSignal.timeout(5000) });
+      onUpdate?.(data);
       if (data.status === 'completed' || data.status === 'failed') return data;
       await new Promise(resolve => setTimeout(resolve, 350));
     }
@@ -255,11 +262,178 @@ async function benchmarkTrial(profile, documentData) {
   }
 }
 
+async function runComparison() {
+  if (comparisonRunning || benchmarkRunning || busy) return;
+  comparisonRunning = true;
+  refreshButton();
+  const status = $('comparison-status');
+  status.textContent = 'Linux ortamı ve kurulu eklenti kontrol ediliyor…';
+  status.hidden = false;
+  $('comparison-results').hidden = true;
+
+  try {
+    const [environment, catalog] = await Promise.all([json('/api/health'), json('/api/plugins')]);
+    const profiles = ['A', 'D'].map(id => environment.profiles.find(profile => profile.id === id));
+    if (!environment.converter || profiles.some(profile => !profile?.available)) {
+      throw Error('A ve D karşılaştırması için çalışan Linux Bubblewrap ortamı ve LibreOffice gerekli.');
+    }
+    if (!catalog.plugins.some(plugin => plugin.id === 'hizlipdf.education' && plugin.installed)) {
+      throw Error('Eklentiler ekranından eğitim paketini kurun.');
+    }
+
+    const columns = $('comparison-runs');
+    columns.replaceChildren();
+    const cards = profiles.map(profile => {
+      const card = $('comparison-card').content.firstElementChild.cloneNode(true);
+      card.querySelector('[data-profile]').textContent = profile.id;
+      card.querySelector('[data-name]').textContent = profile.name;
+      card.querySelector('[data-preview]').alt = `Profil ${profile.id} PDF çıktısının ilk sayfası`;
+      renderComparisonRun(card, { status: 'queued' });
+      columns.append(card);
+      return card;
+    });
+    $('comparison-summary').textContent = 'İki çalışma için PDF ve gözlem kayıtları bekleniyor.';
+    $('comparison-results').hidden = false;
+    status.hidden = true;
+
+    const runs = await Promise.all(profiles.map(async (profile, index) => {
+      const card = cards[index];
+      let run;
+      try {
+        run = await educationTrial(profile.id, { sample: true }, data => renderComparisonRun(card, data));
+      } catch (err) {
+        run = { status: 'unknown', error: err.message };
+      }
+      renderComparisonRun(card, run);
+      return run;
+    }));
+    const [a, d] = runs;
+    const sameInputs = a.input_sha256 && a.input_sha256 === d.input_sha256
+      && a.package_sha256 && a.package_sha256 === d.package_sha256;
+    let conclusion = 'Karşılaştırma doğrulanmadı. Her iki çalışma için geçerli PDF ve referans kontrolü gerekli.';
+    if (runs.every(run => run.status === 'completed' && run.pdf?.sample_validation)) {
+      if (!sameInputs) {
+        conclusion = 'Karşılaştırma doğrulanmadı. Belge veya eklenti özeti iki çalışmada farklı.';
+      } else if (runs.every(run => run.pdf.sample_validation.passed)) {
+        conclusion = `Aynı DOCX ve eklenti kullanıldı. İki PDF de örnek belgenin ${a.pdf.sample_validation.checks.length} kontrolünü geçti.`;
+      } else {
+        conclusion = 'Aynı DOCX ve eklenti kullanıldı. Farklı çıkan PDF kontrolleri ilgili sütunda işaretlendi.';
+      }
+    }
+    $('comparison-summary').textContent = conclusion;
+  } catch (err) {
+    status.textContent = err.message;
+    status.hidden = false;
+  } finally {
+    comparisonRunning = false;
+    refreshButton();
+  }
+}
+
+function renderComparisonRun(card, data) {
+  const find = selector => card.querySelector(selector);
+  const active = ['queued', 'running'].includes(data.status);
+  const status = find('[data-status]');
+  const statuses = {
+    queued: 'Sırada', running: 'Çalışıyor', completed: 'Tamamlandı', failed: 'Başarısız', unknown: 'Doğrulanmadı'
+  };
+  status.textContent = statuses[data.status];
+  status.dataset.tone = data.status;
+  const pending = active ? 'Kayıt bekleniyor' : 'Doğrulanmadı';
+  const events = data.events || [];
+  const receiver = data.receiver || [];
+  const calls = data.syscalls || [];
+  const conversion = events.find(event => event.event === 'CONVERSION_FINISHED');
+  const pdf = data.status === 'completed' && data.pdf?.structurally_valid ? data.pdf : null;
+
+  const empty = find('[data-pdf-empty]');
+  empty.hidden = Boolean(pdf);
+  empty.textContent = active ? 'PDF hazırlanıyor…' : data.error || 'Doğrulanmış PDF yok.';
+  const link = find('[data-pdf-link]');
+  if (pdf && link.hidden) {
+    const preview = find('[data-preview]');
+    const imagePage = find('[data-page]');
+    const extracted = find('[data-pdf-text]');
+    extracted.querySelector('pre').textContent = pdf.text_excerpt || 'PDF metni çıkarılamadı.';
+    if (pdf.preview_url) {
+      preview.onerror = () => {
+        imagePage.hidden = true;
+        extracted.hidden = false;
+      };
+      preview.src = pdf.preview_url;
+      imagePage.hidden = false;
+    } else {
+      extracted.hidden = false;
+    }
+    link.href = pdf.url;
+    link.hidden = false;
+    const checks = find('[data-checks]');
+    for (const check of pdf.sample_validation?.checks || []) {
+      const label = element('span', check.label);
+      const value = element('strong', check.matched
+        ? String(check.actual)
+        : `${check.actual ?? 'Bulunamadı'} · Beklenen ${check.expected}`);
+      const row = element('li');
+      row.dataset.match = String(check.matched);
+      row.append(label, value);
+      checks.append(row);
+    }
+    checks.hidden = !checks.childElementCount;
+  }
+
+  function stage(key, label, details) {
+    const row = find(`[data-step="${key}"]`);
+    row.querySelector('[data-stage]').textContent = label;
+    row.querySelector('[data-detail]').replaceChildren(...details);
+  }
+  function trace(kind) {
+    const lines = calls.filter(call => call.kind === kind);
+    return lines.length
+      ? [element('pre', lines.map(call => call.raw).join('\n'), 'comparison-trace')]
+      : [element('p', active ? 'Çekirdek kaydı çalışma sonunda eklenir.' : 'İlgili sistem çağrısı kaydı yok.')];
+  }
+
+  const pdfStatus = pdf ? 'PDF üretildi' : conversion?.result === 'ok' && active ? 'İşçi PDF üretti' : pending;
+  stage('pdf', pdfStatus, [element('p', pdf
+    ? `PDF sunucuda yapısal kontrolden geçti · ${pdf.pages} sayfa.`
+    : data.error || (conversion?.result === 'ok' && active ? 'Sunucunun PDF doğrulaması bekleniyor.' : pending))]);
+
+  const fileLabels = { opened: 'Dosyalar açıldı', unavailable: 'Dosyalar açılamadı', unverified: 'Doğrulanmadı' };
+  const fileEvents = events.filter(event => event.event === 'TASK_READ');
+  stage('files', fileLabels[data.file_audit?.status] || (active && fileEvents.length ? 'İşçi kaydı var' : pending), [
+    ...(data.file_audit ? [element('p', data.file_audit.summary)] : []),
+    ...trace('openat'),
+    ...fileEvents.map(event => element('p', `İşçi bildirimi · ${event.source} · ${results[event.result] || event.result}`))
+  ]);
+
+  const netLabels = { reachable: 'Bağlantı gözlemlendi', unreachable: 'Bağlantı başarısız', unverified: 'Doğrulanmadı' };
+  const ping = receiver.some(entry => entry.kind === 'LAB_PING');
+  stage('network', netLabels[data.network_audit?.status] || (ping ? 'LAB-PING kabul edildi' : pending), [
+    ...(data.network_audit ? [element('p', data.network_audit.summary)] : []),
+    ...trace('connect')
+  ]);
+
+  const accepted = receiver.filter(entry => entry.kind === 'CONTENT');
+  const bytes = accepted.reduce((sum, entry) => sum + entry.accepted_bytes, 0);
+  const receiverLabel = accepted.length ? `${bytes} bayt kabul edildi`
+    : data.status === 'completed' ? 'İçerik kabul kaydı yok' : pending;
+  const receipts = receiver.map(entry => element('p', entry.kind === 'LAB_PING'
+    ? 'LAB-PING · Yerel alıcı kabul etti.'
+    : `${entry.source} · ${entry.accepted_bytes} bayt`));
+  stage('receiver', receiverLabel, receipts.length ? receipts : [element('p', receiverLabel)]);
+
+  if (data.run_id && !active) {
+    const report = find('[data-report]');
+    report.href = `/api/runs/${data.run_id}/report`;
+    report.hidden = false;
+  }
+}
+$('run-comparison-btn').onclick = runComparison;
+
 async function runBenchmark() {
-  if (benchmarkRunning || busy) return;
+  if (benchmarkRunning || comparisonRunning || busy) return;
   benchmarkRunning = true;
   refreshButton();
-  $('run-benchmark-btn').disabled = true;
   $('benchmark-progress').hidden = false;
   $('benchmark-results').hidden = true;
 
@@ -301,7 +475,7 @@ async function runBenchmark() {
         progress(done, total, `${phase} · Profil ${profile.id}`);
         let data;
         try {
-          data = await benchmarkTrial(profile.id, documentData);
+          data = await educationTrial(profile.id, documentData);
         } catch (err) {
           data = { status: 'unknown', error: err.message };
         }
@@ -315,7 +489,6 @@ async function runBenchmark() {
     $('benchmark-status-text').textContent = err.message;
   } finally {
     benchmarkRunning = false;
-    $('run-benchmark-btn').disabled = false;
     refreshButton();
   }
 }

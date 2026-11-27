@@ -9,11 +9,13 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import secrets
 import shutil
 import signal
 import subprocess
 import threading
+import unicodedata
 import time
 import uuid
 import zipfile
@@ -30,6 +32,9 @@ from packages import PluginStore, build_package
 
 ROOT = Path(__file__).resolve().parent
 MAX_INPUT = 8 * 1024 * 1024
+SAMPLE_HEADINGS = ("MaviRota Danışmanlık", "Müşteri Teklifi")
+SAMPLE_ROWS = (("Belge analizi", "12.000"), ("Raporlama", "8.000"), ("Toplam", "20.000"))
+SAMPLE_FILENAME = "Musteri_Teklifi.docx"
 
 
 def validate_docx(data):
@@ -52,20 +57,52 @@ def validate_docx(data):
 
 def sample_docx():
     doc = Document()
-    doc.add_heading("MaviRota Danışmanlık", 0)
-    doc.add_heading("Müşteri Teklifi", 1)
+    doc.add_heading(SAMPLE_HEADINGS[0], 0)
+    doc.add_heading(SAMPLE_HEADINGS[1], 1)
     doc.add_paragraph("Bu belge tamamen sentetik bir eğitim girdisidir. Türkçe karakter kontrolü: ı İ ş Ş ğ Ğ ü Ü ö Ö ç Ç.")
     table = doc.add_table(rows=1, cols=2)
     table.style = "Light Shading Accent 1"
     for cell, text in zip(table.rows[0].cells, ["Hizmet", "Bedel (deney birimi)"]):
         cell.text = text
-    for name, price in [("Belge analizi", "12.000"), ("Raporlama", "8.000"), ("Toplam", "20.000")]:
+    for name, price in SAMPLE_ROWS:
         cells = table.add_row().cells
         cells[0].text, cells[1].text = name, price
     doc.add_paragraph("Dönüşüm çıktısında bu tablo ve toplam korunmalıdır.")
     stream = io.BytesIO()
     doc.save(stream)
     return stream.getvalue()
+
+
+def check_sample_pdf(text, pages):
+    """Check the built-in document's expected text and values in the extracted PDF."""
+    normalized = " ".join(unicodedata.normalize("NFC", text).split())
+    checks = [{"label": "Sayfa sayısı", "expected": 1, "actual": pages, "matched": pages == 1}]
+    for label, title in zip(("Belge başlığı", "Teklif başlığı"), SAMPLE_HEADINGS):
+        found = bool(re.search(rf"(?<!\w){re.escape(title)}(?!\w)", normalized))
+        checks.append({"label": label, "expected": title, "actual": title if found else None, "matched": found})
+    for label, expected in SAMPLE_ROWS:
+        found = re.search(rf"(?<!\w){re.escape(label)}\s+([0-9][0-9.,]*)(?!\w)", normalized)
+        actual = found.group(1) if found else None
+        checks.append({"label": label, "expected": expected, "actual": actual, "matched": actual == expected})
+    return {"passed": all(check["matched"] for check in checks), "checks": checks}
+
+
+def read_worker_events(path):
+    events = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                if not line.endswith("\n"):
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+    except OSError:
+        pass
+    return events
 
 
 def make_hexdump(data_bytes):
@@ -583,6 +620,8 @@ class Lab:
             raise ValueError("Çalışma verisi kaynak klasörünün dışında olmalıdır.")
         self.data.mkdir(parents=True, exist_ok=True)
         self.plugins = PluginStore(self.data / "_plugins")
+        self.sample = sample_docx()
+        self.preview_renderer = shutil.which("pdftoppm")
         self.runs = {}
         self.lock = threading.RLock()
         self.slots = threading.BoundedSemaphore(2)
@@ -684,12 +723,18 @@ class Lab:
         plugin_id = payload.get("plugin_id") or "hizlipdf." + plugin
         info, package_data = self.plugins.resolve(plugin_id)
         plugin = info["variant"]
-        try:
-            data = base64.b64decode(payload.get("content_base64", ""), validate=True)
-        except (ValueError, binascii.Error, TypeError) as exc:
-            raise ValueError("Dosya içeriği geçersiz.") from exc
+        use_sample = payload.get("sample") is True
+        if use_sample:
+            if "content_base64" in payload:
+                raise ValueError("Örnek belge seçiliyken belge içeriği gönderilemez.")
+            data, filename = self.sample, SAMPLE_FILENAME
+        else:
+            try:
+                data = base64.b64decode(payload.get("content_base64", ""), validate=True)
+            except (ValueError, binascii.Error, TypeError) as exc:
+                raise ValueError("Dosya içeriği geçersiz.") from exc
+            filename = str(payload.get("filename", "belge.docx"))
         validate_docx(data)
-        filename = str(payload.get("filename", "belge.docx"))
         if not filename.lower().endswith(".docx") or len(filename) > 200:
             raise ValueError("Bir DOCX dosyası seçin.")
         if not self.slots.acquire(blocking=False):
@@ -719,7 +764,7 @@ class Lab:
                   }}
         with self.lock:
             self.runs[run_id] = record
-        threading.Thread(target=self.execute, args=(record, data, package_data), daemon=True).start()
+        threading.Thread(target=self.execute, args=(record, data, package_data, use_sample), daemon=True).start()
         return run_id
 
     def view(self, run_id):
@@ -727,14 +772,31 @@ class Lab:
             record = self.runs.get(run_id)
             if not record:
                 return None
-            return json.loads(json.dumps({k: v for k, v in record.items() if k != "token"}))
+            snapshot = json.loads(json.dumps({k: v for k, v in record.items() if k != "token"}))
+        if snapshot["status"] == "running":
+            snapshot["events"] = read_worker_events(self.data / run_id / "worker-events.jsonl")
+        return snapshot
 
-    def execute(self, record, data, package_data):
+    def render_sample_preview(self, pdf_path):
+        if not self.preview_renderer:
+            return False
+        preview = pdf_path.with_name("sample-preview")
+        try:
+            subprocess.run([
+                self.preview_renderer, "-f", "1", "-l", "1", "-scale-to", "960",
+                "-singlefile", "-png", str(pdf_path), str(preview)
+            ], check=True, timeout=8, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return preview.with_suffix(".png").is_file()
+
+    def execute(self, record, data, package_data, use_sample):
         run_probe = record["plugin"] == "education"
         ready_before = self.receiver_ready() if run_probe else None
         start = time.monotonic()
         folder = self.data / record["run_id"]
         sandboxed = record["sandbox_requested"]
+        event_path = folder / "worker-events.jsonl"
         outcome = "failed"
         try:
             folder.mkdir()
@@ -760,27 +822,17 @@ class Lab:
             config_path.chmod(0o600)
             argv = command(config, config_path, folder, ROOT, sandboxed)
             record["status"] = "running"
-            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                    start_new_session=True, cwd=ROOT)
-            try:
-                stdout, stderr = proc.communicate(timeout=75)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                stdout, stderr = proc.communicate()
-                raise RuntimeError("İşçi 75 saniyelik süre sınırını aştı.")
-            events = []
-            for entry in stdout.splitlines():
+            with event_path.open("wb") as event_stream:
+                proc = subprocess.Popen(argv, stdout=event_stream, stderr=subprocess.PIPE, text=True,
+                                        start_new_session=True, cwd=ROOT)
                 try:
-                    event = json.loads(entry)
-                    if isinstance(event, dict):
-                        events.append(event)
-                except json.JSONDecodeError:
-                    pass
-            record["events"] = events
-            record["sandbox_applied"] = sandboxed and any(
-                event.get("event") == "PROCESS_STARTED" and event.get("sandbox") is True for event in events
-            )
+                    _, stderr = proc.communicate(timeout=75)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.communicate()
+                    raise RuntimeError("İşçi 75 saniyelik süre sınırını aştı.")
             if proc.returncode:
+                events = read_worker_events(event_path)
                 detail = next((e.get("detail") for e in reversed(events) if e.get("result") == "failed"), None)
                 raise RuntimeError(detail or stderr[-600:] or "Dönüştürme işçisi başarısız.")
             pdf_path = folder / "output" / "input.pdf"
@@ -791,11 +843,16 @@ class Lab:
                 raise RuntimeError("PDF yapısal doğrulamayı geçemedi.")
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
             record["hashes"]["pdf_sha256"] = pdf_sha256
-            record["pdf"] = {"pages": len(reader.pages), "bytes": len(pdf_bytes),
-                             "sha256": pdf_sha256,
-                             "text_excerpt": text[:900], "structurally_valid": True,
-                             "content_match_verified": False,
-                             "url": f"/api/runs/{record['run_id']}/pdf"}
+            pdf = {"pages": len(reader.pages), "bytes": len(pdf_bytes),
+                   "sha256": pdf_sha256,
+                   "text_excerpt": text[:900], "structurally_valid": True,
+                   "content_match_verified": False,
+                   "url": f"/api/runs/{record['run_id']}/pdf"}
+            if data == self.sample:
+                pdf["sample_validation"] = check_sample_pdf(text, len(reader.pages))
+            if use_sample and self.render_sample_preview(pdf_path):
+                pdf["preview_url"] = f"/api/runs/{record['run_id']}/preview"
+            record["pdf"] = pdf
             record["analysis"] = json.loads((folder / "output/analysis.json").read_text(encoding="utf-8"))
             record["analysis"]["evidence_source"] = "worker"
             outcome = "completed"
@@ -807,7 +864,12 @@ class Lab:
             calls = []
             if sandboxed:
                 calls = read_syscalls(folder / "output" / "syscalls.log", self.receiver.server_port)
+            events = read_worker_events(event_path)
             with self.lock:
+                record["events"] = events
+                record["sandbox_applied"] = sandboxed and any(
+                    event.get("event") == "PROCESS_STARTED" and event.get("sandbox") is True for event in events
+                )
                 record["total_ms"] = total_ms
                 record["syscalls"] = calls
                 record["independent_file_observer"] = any(call["kind"] == "openat" for call in calls)
@@ -825,7 +887,7 @@ class Lab:
                 try:
                     if folder.exists():
                         (folder / "config.json").unlink(missing_ok=True)
-                        snapshot = self.view(record["run_id"])
+                        snapshot = {k: v for k, v in record.items() if k != "token"}
                         snapshot["status"] = outcome
                         (folder / "evidence.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
                 except OSError as exc:
@@ -884,7 +946,7 @@ def app_handler(lab):
                 except ValueError as exc:
                     return self.json({"error": str(exc)}, 404)
             if path == "/api/sample":
-                return self.send_bytes(sample_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", attachment="Musteri_Teklifi.docx")
+                return self.send_bytes(lab.sample, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", attachment=SAMPLE_FILENAME)
             parts = path.strip("/").split("/")
             if len(parts) in (3, 4) and parts[:2] == ["api", "runs"]:
                 run_id = parts[2]
@@ -899,8 +961,14 @@ def app_handler(lab):
                     return self.send_bytes(json.dumps(record, ensure_ascii=False, indent=2).encode(), "application/json", attachment="hizlipdf-evidence.json")
                 if parts[3] == "report":
                     return self.send_bytes(generate_forensic_html_report(record).encode("utf-8"), "text/html; charset=utf-8")
-                if parts[3] == "pdf" and record["pdf"] and record["status"] == "completed":
-                    return self.send_bytes((lab.data / run_id / "output/input.pdf").read_bytes(), "application/pdf")
+                if record["status"] == "completed" and record["pdf"]:
+                    output = lab.data / run_id / "output"
+                    if parts[3] == "pdf":
+                        return self.send_bytes((output / "input.pdf").read_bytes(), "application/pdf")
+                    if parts[3] == "preview" and record["pdf"].get("preview_url"):
+                        preview = output / "sample-preview.png"
+                        if preview.is_file():
+                            return self.send_bytes(preview.read_bytes(), "image/png")
             static = {"/": "index.html", "/app.js": "app.js", "/styles.css": "styles.css"}
             if path in static:
                 kind = {"/": "text/html", "/app.js": "text/javascript", "/styles.css": "text/css"}[path]
