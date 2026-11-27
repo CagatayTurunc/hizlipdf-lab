@@ -1,4 +1,6 @@
+import errno
 import io
+import shutil
 import json
 from pathlib import Path
 import sys
@@ -89,6 +91,54 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(assess({**record, "receiver_health": {"before": True}}, True)[1]["status"], "unverified")
         self.assertEqual(assess({**record, "receiver": [{"kind": "LAB_PING"}]}, True)[1]["status"], "reachable")
         self.assertEqual(assess(record, False)[2]["status"], "unverified")
+
+
+    def test_so_error_is_correlated_with_the_live_process_and_socket(self):
+        destination = '{sa_family=AF_INET, sin_port=htons(32123), sin_addr=inet_addr("127.0.0.1")}'
+        pending = f'42 connect(3, {destination}, 16) = -1 EINPROGRESS (In progress)'
+        failed = '42 getsockopt(3, SOL_SOCKET, SO_ERROR, [ECONNREFUSED], [4]) = 0'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "trace.txt"
+            lines = [pending,
+                     '43 getsockopt(3, SOL_SOCKET, SO_ERROR, [ECONNREFUSED], [4]) = 0',
+                     '42 getsockopt(4, SOL_SOCKET, SO_ERROR, [ECONNREFUSED], [4]) = 0',
+                     '42 close(3) = 0', failed,
+                     pending,
+                     '42 getsockopt(3, SOL_SOCKET, SO_ERROR <unfinished ...>',
+                     '42 <... getsockopt resumed>, [ECONNREFUSED], [4]) = 0']
+            path.write_text("\n".join(lines), encoding="utf-8")
+            calls = read_syscalls(path, 32123)
+
+        self.assertEqual([entry["kind"] for entry in calls], ["connect", "connect", "so_error"])
+        self.assertEqual(calls[1]["attempt"], calls[2]["attempt"])
+        self.assertEqual(calls[2]["errno"], "ECONNREFUSED")
+        self.assertEqual(calls[2]["status"], "error")
+        self.assertIn("<... getsockopt resumed>", calls[2]["raw"])
+        record = {"syscalls": calls, "receiver_health": {"before": True, "after": True}}
+        self.assertEqual(assess(record, True)[1]["status"], "unverified")
+        record["syscalls"] = calls[1:]
+        network = assess(record, True)[1]
+        self.assertEqual(network["status"], "unreachable")
+        self.assertEqual(network["resolved_with_so_error"], 1)
+        self.assertEqual(assess({**record, "receiver_health": {"before": True}}, True)[1]["status"],
+                         "unverified")
+
+    def test_zero_so_error_requires_ready_socket_and_wrong_ports_are_ignored(self):
+        address = '{sa_family=AF_INET, sin_port=htons(32123), sin_addr=inet_addr("127.0.0.1")}'
+        pending = f'42 connect(3, {address}, 16) = -1 EINPROGRESS (In progress)'
+        writable = '42 ppoll([{fd=3, events=POLLOUT|POLLERR}], 1, {tv_sec=1, tv_nsec=0}, NULL, 8) = 1'
+        ok = '42 getsockopt(3, SOL_SOCKET, SO_ERROR, [0], [4]) = 0'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "trace.txt"
+            path.write_text("\n".join([pending, ok]), encoding="utf-8")
+            self.assertEqual(assess({"syscalls": read_syscalls(path, 32123)}, True)[1]["status"], "unverified")
+            path.write_text("\n".join([pending, writable, ok]), encoding="utf-8")
+            self.assertEqual(assess({"syscalls": read_syscalls(path, 32123)}, True)[1]["status"], "reachable")
+            self.assertEqual(read_syscalls(path, 8765), [])
+            path.write_text("\n".join([
+                pending, f'42 getsockopt(3, SOL_SOCKET, SO_ERROR, [{errno.ECONNREFUSED}], [4 => 4]) = 0',
+            ]), encoding="utf-8")
+            self.assertEqual(read_syscalls(path, 32123)[-1]["errno"], "ECONNREFUSED")
 
 
 class IsolationObservationTests(unittest.TestCase):
@@ -255,6 +305,9 @@ class LabTests(unittest.TestCase):
                     self.assertTrue(observation["target_mount"]["read_only"])
                 self.assertEqual(observation["network_relation"],
                                  "shared" if profile in ("A", "B") else "separate")
+                if shutil.which("strace") and profile in ("C", "D"):
+                    self.assertEqual(result["network_audit"]["status"], "unreachable",
+                                     result["syscalls"])
 
 
 if __name__ == "__main__":

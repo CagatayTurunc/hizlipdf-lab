@@ -174,6 +174,8 @@ def generate_forensic_html_report(record):
         st = sc.get("status")
         b_cls = "status-success" if st == "allowed" else "status-neutral"
         b_txt = syscall_labels.get(st, "SONUÇ BELİRSİZ")
+        if sc.get("kind") == "so_error":
+            b_txt = f'SO_ERROR · {html.escape(sc.get("errno") or "0")}'
         syscall_rows.append(f"""
         <div class="syscall-row">
             <span class="status-badge {b_cls}">{b_txt}</span>
@@ -580,7 +582,7 @@ def generate_forensic_html_report(record):
 
         <div class="section-title">⚙️ 4. Linux Sistem Çağrısı Kayıtları</div>
         <p style="font-size: 11px; color: var(--muted); margin: 0 0 10px;">
-            Sentetik hedeflere ve bu çalışmanın yerel alıcısına ilişkin <code>strace</code> kayıtları. <code>openat()</code> dosyanın açılma sonucunu gösterir.
+            Sentetik hedeflere ve bu çalışmanın yerel alıcısına ilişkin <code>strace</code> kayıtları. <code>openat()</code> dosya açmayı, eşleşen <code>SO_ERROR</code> kaydı bağlantı girişiminin nihai soket sonucunu gösterir.
         </p>
         <div class="syscall-container">
             {syscall_body}

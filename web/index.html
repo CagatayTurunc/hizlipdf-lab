@@ -11,6 +11,7 @@
     <button class="nav" id="observer-tab"><span>◉</span> Deney gözlemcisi</button>
     <button class="nav" id="comparison-tab"><span>▥</span> Canlı karşılaştırma</button>
     <button class="nav" id="isolation-tab"><span>⊞</span> İzolasyon inceleyicisi</button>
+    <button class="nav" id="presentation-tab"><span>▸</span> Sunum akışı</button>
     <button class="nav" id="benchmark-tab"><span>📈</span> Karşılaştırma & Benchmark</button>
     <div class="sidebar-bottom"><span class="status-dot"></span> Yerel eğitim laboratuvarı<p>Yalnızca sentetik veriler.<br>Gerçek dönüşüm, görünür kanıt.</p></div>
   </aside>
@@ -62,20 +63,23 @@
         <div class="metrics"><div class="card metric"><span>PDF çıktısı</span><strong id="metric-pdf">—</strong><small>Uygulama doğrulaması</small></div><div class="card metric"><span>Görev dışı okuma</span><strong id="metric-reads">—</strong><small id="metric-reads-sub">İşçi bildirimi</small></div><div class="card metric"><span>Alıcıya ulaşan kaynak</span><strong id="metric-sources">—</strong><small>Bağımsız alıcı kanıtı</small></div><div class="card metric"><span>İçerik yükü</span><strong id="metric-bytes">—</strong><small>LAB-PING hariç</small></div></div>
         <div class="evidence-grid"><section class="card"><div class="card-top"><h2>Seçim ve erişim kapsamı</h2></div><div class="selected-file" id="selected-file"></div><div id="access-list"></div><p class="small-note">Okuma sonuçları işçiden gelir. Alıcı kabulü ayrı servis tarafından kaydedilir.</p></section><section class="card receiver-card"><div class="card-top"><h2>Alıcı Tarafı HTTP Kaydı</h2></div><div id="receiver-list"></div><div id="packet-inspector" class="packet-inspector"></div></section></div>
         <section class="card mitre-card"><div class="card-top"><h2>MITRE ATT&CK® Tehdit Matrisi ve Güvenlik Sınırları</h2><span class="receiver-badge mitre-badge">CYBER THREAT INTEL</span></div><p class="small-note">Deneyde gözlemlenen davranışların ilgili ATT&CK teknikleriyle eşlemesi.</p><div id="mitre-grid" class="mitre-grid"></div></section>
-        <section class="card syscall-card"><div class="card-top"><h2>Linux Sistem Çağrısı Kayıtları</h2></div><p class="small-note">Yalnızca sentetik dosyalara ve bu çalışmanın yerel alıcısına ait <code>strace</code> kayıtları. <code>openat()</code> dosyanın açılma sonucunu gösterir.</p><div id="syscall-terminal" class="syscall-terminal"></div></section>
+        <section class="card syscall-card"><div class="card-top"><h2>Linux Sistem Çağrısı Kayıtları</h2></div><p class="small-note">Yalnızca sentetik dosyalara ve bu çalışmanın yerel alıcısına ait <code>strace</code> kayıtları. <code>openat()</code> dosya açmayı, eşleşen <code>SO_ERROR</code> kaydı bağlantının nihai soket sonucunu gösterir.</p><div id="syscall-terminal" class="syscall-terminal"></div></section>
         <section class="card events-card"><div class="card-top"><h2>Olay akışı</h2><span class="muted" id="duration"></span></div><div class="table-scroll"><table><thead><tr><th>Süre</th><th>Olay</th><th>Kaynak</th><th>Sonuç</th></tr></thead><tbody id="events"></tbody></table></div></section>
         <div class="lab-note" id="evidence-note"></div>
       </div>
     </section>
     <section class="view" id="comparison-view" hidden>
-      <h1>Aynı belge, iki güvenlik profili.</h1>
-      <p class="intro">Müşteri teklifini aynı eğitim eklentisiyle A ve D profillerinde PDF’ye dönüştürün. Sistem çağrısı ve alıcı kayıtlarını iki çıktı üzerinde karşılaştırın.</p>
+      <h1>Canlı karşılaştırma</h1>
+      <p class="intro">Müşteri teklifinin PDF çıktısını ve arka plan kayıtlarını iki çalışma arasında karşılaştırın.</p>
       <section class="card comparison-start">
         <div>
           <h2>Musteri_Teklifi.docx</h2>
-          <p class="small-note">Yerleşik örnek belge · Üç tutar, iki başlık ve sayfa sayısı kontrol edilir.</p>
+          <p class="small-note">Örnek belge · İki başlık, sayfa sayısı ve üç tutar kontrol edilir.</p>
         </div>
-        <button class="primary" id="run-comparison-btn">A ve D’yi karşılaştır <span aria-hidden="true">→</span></button>
+        <div class="comparison-actions">
+          <button class="secondary" id="run-control-btn">Normal ve eğitim eklentisini karşılaştır</button>
+          <button class="primary" id="run-comparison-btn">A ve D’yi karşılaştır <span aria-hidden="true">→</span></button>
+        </div>
         <p id="comparison-status" class="comparison-status" role="status" hidden></p>
       </section>
       <div id="comparison-results" hidden>
@@ -155,7 +159,7 @@
           <section class="card">
             <h2>Yerel alıcı gözlemi</h2>
             <p id="isolation-network-audit"></p>
-            <pre id="isolation-network-calls" class="comparison-trace" hidden></pre>
+            <div id="isolation-network-calls"></div>
           </section>
         </div>
       </div>
@@ -166,6 +170,46 @@
           <dt><code>EACCES</code></dt><dd>Dosya veya yol bileşenlerinden biri için erişim izni reddedildi.</dd>
         </dl>
       </details>
+    </section>
+    <section class="view" id="presentation-view" hidden>
+      <h1>Sunum akışı</h1>
+      <p class="intro">Aynı belgeyle başlayın, iki Linux kısıtını canlı inceleyin ve ölçümleri kayıtlı deneyden açın.</p>
+
+      <ol class="presentation-stages">
+        <li class="card presentation-stage">
+          <div>
+            <h2>PDF’ler aynı kontrolleri geçiyor mu?</h2>
+            <p>Profil A’da normal ve eğitim eklentilerini çalıştırın. PDF kontrolleri, dosya açma çağrıları ve yerel alıcı kayıtları üzerinden iki eklentiyi karşılaştırın.</p>
+          </div>
+          <div class="presentation-actions">
+            <button class="primary" id="presentation-control">Kontrol deneyini aç <span aria-hidden="true">→</span></button>
+            <button class="secondary" id="presentation-ad">A/D karşılaştırmasını aç</button>
+          </div>
+        </li>
+        <li class="card presentation-stage">
+          <div>
+            <h2>Alıcıya 0 bayt ulaşırsa hangi kısıt devrededir?</h2>
+            <p>B ve C’yi çalıştırıp önce dosya bağlamasını, ardından ağ ad alanı kimliğini ve soketin nihai sonucunu açın.</p>
+            <details>
+              <summary>Beklenen gözlemleri aç</summary>
+              <p>B’de sentetik dosyalar işçinin görünümüne bağlanmaz. Yerel alıcı bağlantı testini kabul edebilir.</p>
+              <p>C’de hedefler salt okunur bağlıdır. İşçi ile alıcının ağ ad alanı kimlikleri farklıdır. Ulaşma sonucu soket ve alıcı kayıtlarından okunur.</p>
+            </details>
+          </div>
+          <div class="presentation-actions">
+            <button class="primary" id="presentation-isolation">İzolasyon inceleyicisini aç <span aria-hidden="true">→</span></button>
+          </div>
+        </li>
+        <li class="card presentation-stage">
+          <div>
+            <h2>Aynı sonuç beş ölçümde tekrarlandı mı?</h2>
+            <p>Kaydedilen seride PDF kontrollerini, alıcının kabul ettiği baytları ve işlem süresi aralıklarını gösterin.</p>
+          </div>
+          <div class="presentation-actions">
+            <button class="primary" id="presentation-benchmark">Son kayıtlı deneyi aç <span aria-hidden="true">→</span></button>
+          </div>
+        </li>
+      </ol>
     </section>
     <section class="view" id="benchmark-view" hidden>
       <div class="eyebrow">AKADEMİK DEĞERLENDİRME & BENCHMARK</div>

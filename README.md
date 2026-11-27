@@ -60,7 +60,7 @@ Tarayıcınızı açın ve adrese gidin:
 
 ### 1. Linux sistem çağrısı kayıtları
 
-Linux'ta `strace` varsa panel, yalnızca iki sentetik dosya ve çalışmanın gerçek yerel alıcı adresiyle eşleşen `openat()` ve `connect()` kayıtlarını gösterir. Dosyanın açılması, işçinin bildirdiği içerik okumasından ayrı değerlendirilir. İlgili kayıt eksikse veya çalışma başarısızsa deney sonucu **Doğrulanmadı** olarak gösterilir.
+Linux'ta `strace` varsa panel, iki sentetik dosyanın `openat()` kayıtlarını ve çalışmanın gerçek yerel alıcısına yönelik `connect()` girişimlerini gösterir. Eşleşen `SO_ERROR` gözlemi varsa nihai soket sonucu da görünür. Dosyanın açılması, işçinin bildirdiği içerik okumasından ayrı değerlendirilir. İlgili kayıt eksikse veya çalışma başarısızsa deney sonucu **Doğrulanmadı** olarak gösterilir.
 
 ### 2. MITRE ATT&CK® eşlemesi
 
@@ -93,10 +93,11 @@ Deney gözlemcisindeki **Adli Bilişim Raporu (.html / .pdf)** bağlantısı ça
 2. **Belge dönüştür** ekranında örnek DOCX'i seçin ve Profil A altında PDF üretin.
 3. **Deney gözlemcisi** ekranında alıcı tarafı HTTP kaydını ve sistem çağrılarını inceleyin.
 4. Aynı dönüşümü Profil D'de çalıştırın. PDF durumunu, iki sentetik hedefe ilişkin dosya açma kayıtlarını ve yerel alıcıya bağlantı sonucunu karşılaştırın.
-5. **Canlı karşılaştırma** ekranında A ve D profillerini aynı örnek DOCX ve eğitim paketiyle çalıştırın. İki PDF’yi, örnek belge kontrollerini ve dört kanıt adımını yan yana inceleyin. `pdftoppm` kullanılamadığında ekranda PDF’den çıkarılan metin gösterilir. Ubuntu’da ilk sayfa görseli için `poppler-utils` kurulabilir.
+5. **Canlı karşılaştırma** ekranında Profil A ile normal ve eğitim eklentilerini karşılaştırın. Ardından A ve D profillerini aynı örnek DOCX ve eğitim paketiyle çalıştırın. İki PDF’yi, örnek belge kontrollerini ve dört kanıt adımını yan yana inceleyin. `pdftoppm` kullanılamadığında ekranda PDF’den çıkarılan metin gösterilir. Ubuntu’da ilk sayfa görseli için `poppler-utils` kurulabilir.
 6. **İzolasyon inceleyicisi** ekranında B ve C profillerini ayrı ayrı çalıştırın. İşçinin bağlama kaydını, iki ağ ad alanı kimliğini ve çalışmanın `openat()` sonuçlarını inceleyin.
 7. Tekrarlı ölçüm için **Karşılaştırma & Benchmark** sekmesini açın. Bitince **Kanıt paketini indir** düğmesi profil ayarlarını, sistem çağrılarını, alıcı kayıtlarını, PDF kontrollerini ve ölçümleri tek JSON dosyasına yazar.
-8. Aynı veri diziniyle yeniden başlattığınızda **Kayıtlı deney → Kaydı aç** üzerinden geçmiş seriyi açabilirsiniz. Rapor bağlantıları her profilin çalışma kayıtlarında bulunur. Arşiv özelliğinden önceki ölçümlerin çalışma kayıtları seriye otomatik olarak gruplanmaz.
+8. **Sunum akışı** ekranından kontrol deneyi, izolasyon inceleyicisi ve son kayıtlı deneye geçebilirsiniz. Adımlar [sunum kılavuzunda](docs/SUNUM_AKISI.md) yer alır.
+9. Aynı veri diziniyle yeniden başlattığınızda **Kayıtlı deney → Kaydı aç** üzerinden geçmiş seriyi açabilirsiniz. Rapor bağlantıları her profilin çalışma kayıtlarında bulunur. Arşiv özelliğinden önceki ölçümlerin çalışma kayıtları seriye otomatik olarak gruplanmaz.
 
 ---
 

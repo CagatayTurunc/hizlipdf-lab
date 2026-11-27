@@ -184,3 +184,31 @@
 @media (max-width: 550px) {
   .benchmark-history { grid-template-columns: 1fr; }
 }
+
+.comparison-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.network-evidence-block { margin-top: 10px; }
+.network-evidence-block small { font-weight: 650; color: #45635e; }
+.network-evidence-block .comparison-trace { margin-top: 4px; }
+.presentation-stages { display: grid; gap: 16px; padding: 0; margin: 0; list-style: none; }
+.presentation-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 230px);
+  align-items: start;
+  gap: 16px 26px;
+}
+.presentation-stage h2 { font-size: 18px; margin: 0 0 7px; }
+.presentation-stage p { margin: 0 0 8px; color: #536a65; }
+.presentation-stage summary { cursor: pointer; font-weight: 650; font-size: 12px; margin-top: 8px; }
+.presentation-stage details p { margin-top: 7px; font-size: 12px; }
+.presentation-actions { display: grid; gap: 8px; }
+.presentation-actions .primary { gap: 10px; }
+@media (max-width: 740px) {
+  .presentation-stage, .comparison-start { grid-template-columns: 1fr; }
+  .comparison-actions { justify-content: flex-start; }
+}

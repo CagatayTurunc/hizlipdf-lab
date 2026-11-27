@@ -9,11 +9,12 @@ const results = {ok:'Başarılı (işçi)',partial:'Bazı kayıtlar alınamadı'
 
 Object.assign(names,{PLUGIN_LOADED:'Kurulu paket yüklendi',PLUGIN_FAILED:'Paket yüklenemedi',ANALYSIS_FINISHED:'Belge analiz edildi'});
 function view(name) {
-  for (const key of ['user','plugins','observer','comparison','isolation','benchmark']) {
+  for (const key of ['user','plugins','observer','comparison','isolation','presentation','benchmark']) {
     const el = $(key+'-view'), tab = $(key+'-tab');
     if (el) el.hidden = key !== name;
     if (tab) tab.classList.toggle('active', key === name);
   }
+  window.scrollTo(0, 0);
 }
 $('user-tab').onclick = () => view('user');
 $('plugins-tab').onclick = $('manage-plugins').onclick = () => view('plugins');
@@ -24,12 +25,13 @@ $('benchmark-tab').onclick = () => {
 };
 $('comparison-tab').onclick = () => view('comparison');
 $('isolation-tab').onclick = () => view('isolation');
+$('presentation-tab').onclick = () => view('presentation');
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
 function runInProgress() { return busy || benchmarkRunning || comparisonRunning || isolationRunning; }
 function refreshButton() {
   const active = runInProgress();
   $('convert-button').disabled = active || !file || !health?.converter || !$('plugin').value;
-  $('run-comparison-btn').disabled = $('run-isolation-btn').disabled = active;
+  $('run-control-btn').disabled = $('run-comparison-btn').disabled = $('run-isolation-btn').disabled = active;
   $('run-benchmark-btn').disabled = active || openingBenchmark;
   $('benchmark-history-open').disabled = benchmarkRunning || openingBenchmark || !$('benchmark-history-list').value;
   $('benchmark-save-retry').disabled = benchmarkRunning;
@@ -100,6 +102,17 @@ $('convert-button').onclick = async () => {
   finally { busy = false; document.body.classList.remove('busy'); $('sample-button').disabled = $('plugin').disabled = $('profile').disabled = $('file-input').disabled = false; refreshButton(); }
 };
 function element(tag, text, cls) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; }
+function socketResultLabel(call) {
+  return `Nihai soket sonucu · SO_ERROR = ${call.errno || '0'}`;
+}
+function networkTraceBlocks(calls) {
+  return calls.filter(call => call.kind === 'connect' || call.kind === 'so_error').map(call => {
+    const block = element('div', undefined, 'network-evidence-block');
+    const label = call.kind === 'so_error' ? socketResultLabel(call) : 'Bağlantı girişimi · connect()';
+    block.append(element('small', label), element('pre', call.raw, 'comparison-trace'));
+    return block;
+  });
+}
 function renderEvidence(data) {
   $('no-run').hidden = true; $('evidence-view').hidden = false;
   $('run-id').textContent = data.run_id; $('run-profile').textContent = `Profil ${data.profile} · ${data.plugin_manifest?.name || data.plugin} · v${data.plugin_manifest?.version || '0.1'}`;
@@ -187,7 +200,8 @@ function renderEvidence(data) {
     } else {
       for (const call of syscalls) {
         const line = element('div', undefined, 'syscall-line');
-        const badge = element('span', syscallLabels[call.status] || 'SONUÇ BELİRSİZ', `syscall-badge ${call.status}`);
+        const label = call.kind === 'so_error' ? socketResultLabel(call) : syscallLabels[call.status] || 'SONUÇ BELİRSİZ';
+        const badge = element('span', label, `syscall-badge ${call.status}`);
         const text = element('span', call.raw, 'syscall-text');
         line.append(badge, text);
         term.append(line);
@@ -249,12 +263,12 @@ async function pluginAction(action) {
 }
 $('plugin-upload-button').onclick=()=>$('plugin-file').click();
 $('plugin-file').onchange=(event)=>{ const selected=event.target.files[0]; if(selected) pluginAction(async()=>{await installBlob(selected); return 'Seçilen paket doğrulandı ve kuruldu.';}); event.target.value=''; };
-async function educationTrial(profile, documentData, onUpdate) {
+async function runTrial(profile, documentData, {pluginId = 'hizlipdf.education', onUpdate} = {}) {
   const { run_id: runId } = await json('/api/runs', {
     method: 'POST',
     signal: AbortSignal.timeout(10000),
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...documentData, profile, plugin_id: 'hizlipdf.education' })
+    body: JSON.stringify({ ...documentData, profile, plugin_id: pluginId })
   });
   const deadline = Date.now() + 95000;
   try {
@@ -327,10 +341,7 @@ function renderIsolation(profile, data) {
   const ping = (data.receiver || []).some(entry => entry.kind === 'LAB_PING');
   const summary = data.network_audit?.summary || (active ? 'Bağlantı kaydı bekleniyor.' : 'Bağlantı sonucu doğrulanmadı.');
   $('isolation-network-audit').textContent = ping ? 'Yerel alıcı LAB-PING kaydını kabul etti.' : summary;
-  const networkCalls = calls.filter(call => call.kind === 'connect');
-  const networkTrace = $('isolation-network-calls');
-  networkTrace.hidden = !networkCalls.length;
-  networkTrace.textContent = networkCalls.map(call => call.raw).join('\n');
+  $('isolation-network-calls').replaceChildren(...networkTraceBlocks(calls));
 }
 
 $('isolation-profiles').onchange = (event) => {
@@ -360,7 +371,7 @@ $('run-isolation-btn').onclick = async () => {
     renderIsolation(profile, {status: 'queued'});
     let run;
     try {
-      run = await educationTrial(profile, {sample: true}, data => renderIsolation(profile, data));
+      run = await runTrial(profile, {sample: true}, {onUpdate: data => renderIsolation(profile, data)});
     } catch (err) {
       run = {status: 'unknown', error: err.message};
     }
@@ -380,7 +391,7 @@ $('run-isolation-btn').onclick = async () => {
   }
 };
 
-async function runComparison() {
+async function runComparison(control) {
   if (runInProgress()) return;
   comparisonRunning = true;
   refreshButton();
@@ -391,21 +402,25 @@ async function runComparison() {
 
   try {
     const [environment, catalog] = await Promise.all([json('/api/health'), json('/api/plugins')]);
-    const profiles = ['A', 'D'].map(id => environment.profiles.find(profile => profile.id === id));
-    if (!environment.converter || profiles.some(profile => !profile?.available)) {
-      throw Error('A ve D karşılaştırması için çalışan Linux Bubblewrap ortamı ve LibreOffice gerekli.');
+    const matchups = control
+      ? [{id: 'A', plugin: 'normal', name: 'Normal referans'}, {id: 'A', plugin: 'education', name: 'Eğitim eklentisi'}]
+      : ['A', 'D'].map(id => ({id, plugin: 'education', name: environment.profiles.find(profile => profile.id === id)?.name}));
+    if (!environment.converter || matchups.some(side => !environment.profiles.some(profile => profile.id === side.id && profile.available))) {
+      throw Error(control ? 'Kontrol deneyi için LibreOffice gerekli.'
+        : 'A ve D karşılaştırması için çalışan Linux Bubblewrap ortamı ve LibreOffice gerekli.');
     }
-    if (!catalog.plugins.some(plugin => plugin.id === 'hizlipdf.education' && plugin.installed)) {
-      throw Error('Eklentiler ekranından eğitim paketini kurun.');
+    if (matchups.some(side => !catalog.plugins.some(plugin => plugin.id === `hizlipdf.${side.plugin}` && plugin.installed))) {
+      throw Error(control ? 'Eklentiler ekranından normal ve eğitim paketlerini kurun.'
+        : 'Eklentiler ekranından eğitim paketini kurun.');
     }
 
     const columns = $('comparison-runs');
     columns.replaceChildren();
-    const cards = profiles.map(profile => {
+    const cards = matchups.map(side => {
       const card = $('comparison-card').content.firstElementChild.cloneNode(true);
-      card.querySelector('[data-profile]').textContent = profile.id;
-      card.querySelector('[data-name]').textContent = profile.name;
-      card.querySelector('[data-preview]').alt = `Profil ${profile.id} PDF çıktısının ilk sayfası`;
+      card.querySelector('[data-profile]').textContent = side.id;
+      card.querySelector('[data-name]').textContent = side.name;
+      card.querySelector('[data-preview]').alt = `Profil ${side.id} · ${side.name} PDF çıktısının ilk sayfası`;
       renderComparisonRun(card, { status: 'queued' });
       columns.append(card);
       return card;
@@ -414,28 +429,34 @@ async function runComparison() {
     $('comparison-results').hidden = false;
     status.hidden = true;
 
-    const runs = await Promise.all(profiles.map(async (profile, index) => {
+    const runs = await Promise.all(matchups.map(async (side, index) => {
       const card = cards[index];
       let run;
       try {
-        run = await educationTrial(profile.id, { sample: true }, data => renderComparisonRun(card, data));
+        run = await runTrial(side.id, { sample: true }, {
+          pluginId: `hizlipdf.${side.plugin}`, onUpdate: data => renderComparisonRun(card, data)
+        });
       } catch (err) {
         run = { status: 'unknown', error: err.message };
       }
       renderComparisonRun(card, run);
       return run;
     }));
-    const [a, d] = runs;
-    const sameInputs = a.input_sha256 && a.input_sha256 === d.input_sha256
-      && a.package_sha256 && a.package_sha256 === d.package_sha256;
+    const [left, right] = runs;
+    const validMatch = Boolean(left.input_sha256 && left.input_sha256 === right.input_sha256)
+      && runs.every((run, index) => run.profile === matchups[index].id && run.plugin === matchups[index].plugin)
+      && Boolean(left.package_sha256 && right.package_sha256)
+      && (control ? left.package_sha256 !== right.package_sha256 : left.package_sha256 === right.package_sha256);
+    const design = control ? 'Profil A’da aynı DOCX iki farklı eklentiyle işlendi.'
+      : 'Aynı DOCX ve eklenti kullanıldı.';
     let conclusion = 'Karşılaştırma doğrulanmadı. Her iki çalışma için geçerli PDF ve referans kontrolü gerekli.';
     if (runs.every(run => run.status === 'completed' && run.pdf?.sample_validation)) {
-      if (!sameInputs) {
-        conclusion = 'Karşılaştırma doğrulanmadı. Belge veya eklenti özeti iki çalışmada farklı.';
+      if (!validMatch) {
+        conclusion = 'Karşılaştırma doğrulanmadı. Belge, eklenti veya profil deney düzeniyle eşleşmedi.';
       } else if (runs.every(run => run.pdf.sample_validation.passed)) {
-        conclusion = `Aynı DOCX ve eklenti kullanıldı. İki PDF de örnek belgenin ${a.pdf.sample_validation.checks.length} kontrolünü geçti.`;
+        conclusion = `${design} İki PDF de örnek belgenin ${left.pdf.sample_validation.checks.length} kontrolünü geçti.`;
       } else {
-        conclusion = 'Aynı DOCX ve eklenti kullanıldı. Farklı çıkan PDF kontrolleri ilgili sütunda işaretlendi.';
+        conclusion = `${design} Farklı çıkan PDF kontrolleri ilgili sütunda işaretlendi.`;
       }
     }
     $('comparison-summary').textContent = conclusion;
@@ -516,7 +537,7 @@ function renderComparisonRun(card, data) {
     ? `PDF sunucuda yapısal kontrolden geçti · ${pdf.pages} sayfa.`
     : data.error || (conversion?.result === 'ok' && active ? 'Sunucunun PDF doğrulaması bekleniyor.' : pending))]);
 
-  const fileLabels = { opened: 'Dosyalar açıldı', unavailable: 'Dosyalar açılamadı', unverified: 'Doğrulanmadı' };
+  const fileLabels = { opened: 'Dosyalar açıldı', unavailable: 'Dosyalar açılamadı', not_attempted: 'Denenmedi', unverified: 'Doğrulanmadı' };
   const fileEvents = events.filter(event => event.event === 'TASK_READ');
   stage('files', fileLabels[data.file_audit?.status] || (active && fileEvents.length ? 'İşçi kaydı var' : pending), [
     ...(data.file_audit ? [element('p', data.file_audit.summary)] : []),
@@ -524,11 +545,12 @@ function renderComparisonRun(card, data) {
     ...fileEvents.map(event => element('p', `İşçi bildirimi · ${event.source} · ${results[event.result] || event.result}`))
   ]);
 
-  const netLabels = { reachable: 'Bağlantı gözlemlendi', unreachable: 'Bağlantı başarısız', unverified: 'Doğrulanmadı' };
+  const netLabels = { reachable: 'Bağlantı gözlemlendi', unreachable: 'Bağlantı başarısız', not_attempted: 'Denenmedi', unverified: 'Doğrulanmadı' };
   const ping = receiver.some(entry => entry.kind === 'LAB_PING');
+  const networkBlocks = networkTraceBlocks(calls);
   stage('network', netLabels[data.network_audit?.status] || (ping ? 'LAB-PING kabul edildi' : pending), [
     ...(data.network_audit ? [element('p', data.network_audit.summary)] : []),
-    ...trace('connect')
+    ...(networkBlocks.length ? networkBlocks : [element('p', active ? 'Çekirdek kaydı çalışma sonunda eklenir.' : 'İlgili sistem çağrısı kaydı yok.')])
   ]);
 
   const accepted = receiver.filter(entry => entry.kind === 'CONTENT');
@@ -546,7 +568,11 @@ function renderComparisonRun(card, data) {
     report.hidden = false;
   }
 }
-$('run-comparison-btn').onclick = runComparison;
+$('run-comparison-btn').onclick = () => runComparison(false);
+$('run-control-btn').onclick = () => runComparison(true);
+$('presentation-control').onclick = () => { view('comparison'); $('run-control-btn').focus(); };
+$('presentation-ad').onclick = () => { view('comparison'); $('run-comparison-btn').focus(); };
+$('presentation-isolation').onclick = () => { view('isolation'); $('run-isolation-btn').focus(); };
 
 async function refreshBenchmarkHistory(selected) {
   const list = $('benchmark-history-list');
@@ -566,6 +592,7 @@ async function refreshBenchmarkHistory(selected) {
     if (benchmarks.some(bundle => bundle.series_id === previous)) list.value = previous;
     if (!openingBenchmark) status.hidden = true;
     refreshButton();
+    return benchmarks;
   } catch (err) {
     status.textContent = `Kayıt listesi alınamadı. ${err.message}`;
     status.hidden = false;
@@ -577,8 +604,8 @@ function benchmarkDate(timestamp) {
 }
 
 $('benchmark-history-list').onchange = refreshButton;
-$('benchmark-history-open').onclick = async () => {
-  const id = $('benchmark-history-list').value;
+$('benchmark-history-open').onclick = () => openSavedBenchmark($('benchmark-history-list').value);
+async function openSavedBenchmark(id) {
   if (!id || benchmarkRunning || openingBenchmark) return;
   openingBenchmark = true;
   refreshButton();
@@ -595,7 +622,22 @@ $('benchmark-history-open').onclick = async () => {
     openingBenchmark = false;
     refreshButton();
   }
+}
+
+$('presentation-benchmark').onclick = async () => {
+  view('benchmark');
+  const history = await refreshBenchmarkHistory();
+  if (!history) return;
+  if (!history.length) {
+    $('benchmark-history-status').textContent = 'Henüz kayıtlı deney yok. Önce bir karşılaştırmalı deney çalıştırın.';
+    $('benchmark-history-status').hidden = false;
+    return;
+  }
+  const latest = history[0].series_id;
+  $('benchmark-history-list').value = latest;
+  await openSavedBenchmark(latest);
 };
+
 
 async function saveBenchmark() {
   const bundle = await json('/api/benchmarks', {
@@ -674,7 +716,7 @@ async function runBenchmark() {
         progress(attempts.length, total, `${phase} · Profil ${profile.id}`);
         let data;
         try {
-          data = await educationTrial(profile.id, documentData);
+          data = await runTrial(profile.id, documentData);
         } catch (err) {
           data = { error: err.message };
         }
