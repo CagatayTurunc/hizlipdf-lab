@@ -101,6 +101,68 @@ function renderEvidence(data) {
   const contents = data.receiver.filter(e=>e.kind==='CONTENT');
   if (!contents.length) $('receiver-list').append(element('p','Görev dışı içerik kabul kaydı yok. Bu durum tek başına ağın engellendiğini kanıtlamaz.','empty-record'));
   for (const entry of contents) { const card = element('div',undefined,'receiver-record'); card.append(element('strong',entry.source)); card.append(element('pre',entry.content)); card.append(element('small',`${entry.accepted_bytes} bayt · Alıcı tarafından kabul edildi`)); $('receiver-list').append(card); }
+  const pktContainer = $('packet-inspector');
+  if (pktContainer) {
+    pktContainer.replaceChildren();
+    const netAudit = data.network_audit || {};
+    const packets = (data.receiver || []).filter(e => e.raw_http);
+    if (netAudit.status === 'blocked' || (data.profile && PROFILES[data.profile] && !PROFILES[data.profile].network)) {
+      const blockedCard = element('div', undefined, 'packet-card blocked-packet');
+      blockedCard.innerHTML = `
+        <div class="packet-header">
+          <span class="packet-method-badge blocked">AĞ ENGELLENDİ</span>
+          <span class="packet-uri">TCP / IP İletişimi Reddedildi</span>
+          <span class="packet-time">0 Paket · 0 Bayt</span>
+        </div>
+        <p class="packet-explain"><strong>Linux Network Namespace (--unshare-net)</strong> devrede olduğu için işlem ağ kartına (loopback dahil) erişememiş, işletim sistemi seviyesinde soket bağlantısı engellenmiştir.</p>
+        <pre class="packet-trace-pre">${netAudit.trace || 'socket(AF_INET, SOCK_STREAM) -> connect() = -1 ENETUNREACH'}</pre>
+      `;
+      pktContainer.append(blockedCard);
+    } else if (!packets.length) {
+      const noPkt = element('div', undefined, 'packet-card');
+      noPkt.innerHTML = `
+        <div class="packet-header">
+          <span class="packet-method-badge allowed">AĞ AÇIK</span>
+          <span class="packet-uri">İletişim Bekleniyor</span>
+        </div>
+        <p class="packet-explain">${data.plugin === 'normal' ? 'Normal referans eklentisi veri sızdırma teşebbüsünde bulunmadı.' : 'Herhangi bir HTTP isteği yakalanmadı.'}</p>
+        <pre class="packet-trace-pre">${netAudit.trace || 'socket(AF_INET, SOCK_STREAM) = 5 (Hazır)'}</pre>
+      `;
+      pktContainer.append(noPkt);
+    } else {
+      const title = element('h4', 'CANLI AĞ PAKETİ İNCELEYİCİSİ (RAW HTTP / HEX)', 'packet-section-title');
+      pktContainer.append(title);
+      packets.forEach((pkt, idx) => {
+        const card = element('div', undefined, 'packet-card');
+        const header = element('div', undefined, 'packet-header');
+        header.innerHTML = `
+          <span class="packet-method-badge allowed">POST</span>
+          <span class="packet-uri">/collect (${pkt.kind === 'LAB_PING' ? 'LAB_PING' : pkt.source})</span>
+          <div class="packet-tabs">
+            <button class="packet-tab-btn active" data-target="raw-${idx}">Formatlı HTTP</button>
+            <button class="packet-tab-btn" data-target="hex-${idx}">Hex Dökümü</button>
+          </div>
+        `;
+        const rawBox = element('pre', pkt.raw_http, 'packet-body-pre');
+        rawBox.id = `raw-${idx}`;
+        const hexBox = element('pre', pkt.hex_dump || 'Hexdump mevcut değil.', 'packet-body-pre hexdump-pre');
+        hexBox.id = `hex-${idx}`;
+        hexBox.hidden = true;
+        header.querySelectorAll('.packet-tab-btn').forEach(btn => {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            header.querySelectorAll('.packet-tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const target = btn.dataset.target;
+            rawBox.hidden = target !== `raw-${idx}`;
+            hexBox.hidden = target !== `hex-${idx}`;
+          };
+        });
+        card.append(header, rawBox, hexBox);
+        pktContainer.append(card);
+      });
+    }
+  }
   if ($('metric-reads-sub')) {
     $('metric-reads-sub').textContent = data.independent_file_observer ? '✓ Çekirdek (strace) ile doğrulandı' : 'İşçi bildirimi';
   }

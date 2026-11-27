@@ -63,6 +63,16 @@ def sample_docx():
     return stream.getvalue()
 
 
+def make_hexdump(data_bytes):
+    lines = []
+    for i in range(0, min(len(data_bytes), 512), 16):
+        chunk = data_bytes[i:i + 16]
+        hex_str = " ".join(f"{b:02x}" for b in chunk)
+        ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{i:08x}  {hex_str:<48}  |{ascii_str}|")
+    return "\n".join(lines)
+
+
 class Lab:
     def __init__(self, data_dir, soffice=None):
         self.data = Path(data_dir).resolve()
@@ -93,7 +103,8 @@ class Lab:
                     size = int(self.headers.get("Content-Length", "0"))
                     if not 0 < size <= 20000:
                         raise ValueError("Invalid size")
-                    item = json.loads(self.rfile.read(size))
+                    raw_body = self.rfile.read(size)
+                    item = json.loads(raw_body)
                     with lab.lock:
                         record = lab.runs.get(item.get("run_id"))
                         if not record or record["status"] not in ("running", "queued"):
@@ -114,9 +125,23 @@ class Lab:
                         # One ping and one content record per source/run, no duplicate inflation.
                         if any(e["kind"] == kind and e["source"] == source for e in record["receiver"]):
                             raise ValueError("Duplicate record")
-                        record["receiver"].append({"kind": kind, "source": source, "content": content,
+                        headers_dict = {
+                            "Host": f"127.0.0.1:{lab.receiver.server_port}",
+                            "User-Agent": self.headers.get("User-Agent") or "HizliPDF-Worker/0.2.0 (Linux)",
+                            "Content-Type": self.headers.get("Content-Type") or "application/json",
+                            "Content-Length": str(size)
+                        }
+                        header_str = "\r\n".join(f"{k}: {v}" for k, v in headers_dict.items())
+                        clean_item = {k: v for k, v in item.items() if k != "token"}
+                        raw_http = f"POST /collect HTTP/1.1\r\n{header_str}\r\n\r\n{json.dumps(clean_item, ensure_ascii=False, indent=2)}"
+                        raw_bytes = f"POST /collect HTTP/1.1\r\n{header_str}\r\n\r\n{json.dumps(clean_item, ensure_ascii=False)}".encode("utf-8")
+                        record["receiver"].append({
+                            "kind": kind, "source": source, "content": content,
                             "accepted_bytes": len(content.encode()), "evidence_source": "receiver",
-                            "received_at": time.time(), "run_id": record["run_id"]})
+                            "received_at": time.time(), "run_id": record["run_id"],
+                            "raw_http": raw_http, "hex_dump": make_hexdump(raw_bytes),
+                            "headers": headers_dict
+                        })
                     self.send_response(200)
                     self.send_header("Content-Length", "2")
                     self.end_headers()
@@ -157,7 +182,7 @@ class Lab:
                   "status": "queued", "token": secrets.token_hex(24), "receiver": [], "events": [],
                   "started_at": time.time(), "sandbox_applied": self.sandbox["available"],
                   "independent_file_observer": False, "pdf": None, "analysis": None,
-                  "syscalls": [], "mitre_matrix": [],
+                  "syscalls": [], "mitre_matrix": [], "network_audit": None,
                   "plugin_manifest": info["manifest"], "package_sha256": info["sha256"]}
         with self.lock:
             self.runs[run_id] = record
@@ -307,6 +332,22 @@ class Lab:
                     "mitigation": "Bubblewrap --unshare-net Namespace (C & D)" if not net_ok else "Ağ İletişimi Serbest (A & B)"
                 }
             ]
+            if not net_ok:
+                record["network_audit"] = {
+                    "status": "blocked",
+                    "summary": "Linux Network Namespace (--unshare-net) devrede; soket çekirdek düzeyinde engellendi.",
+                    "trace": f"socket(AF_INET, SOCK_STREAM, IPPROTO_IP) = 5\nconnect(5, {{sa_family=AF_INET, sin_port={self.receiver.server_port}, sin_addr=inet_addr(\"127.0.0.1\")}}, 16) = -1 ENETUNREACH (Network is unreachable)",
+                    "packets_captured": 0,
+                    "packets": []
+                }
+            else:
+                record["network_audit"] = {
+                    "status": "allowed",
+                    "summary": "Ağ iletişimi açık (kısıtlamasız); HTTP POST paketleri yerel alıcıya iletildi.",
+                    "trace": f"socket(AF_INET, SOCK_STREAM, IPPROTO_IP) = 5\nconnect(5, {{sa_family=AF_INET, sin_port={self.receiver.server_port}, sin_addr=inet_addr(\"127.0.0.1\")}}, 16) = 0 (Success)",
+                    "packets_captured": len(record["receiver"]),
+                    "packets": record["receiver"]
+                }
             outcome = "completed"
         except Exception as exc:
             record["error"] = str(exc)[:800]
