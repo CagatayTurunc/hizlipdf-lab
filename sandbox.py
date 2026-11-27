@@ -61,6 +61,7 @@ def command(config, config_path, run_dir, root, supported):
             "--unsetenv", "DISPLAY", "--unsetenv", "WAYLAND_DISPLAY",
             "--setenv", "SAL_USE_VCLPLUGIN", "svp", "--"]
     if shutil.which("strace"):
-        cmd += ["strace", "-f", "-s", "256", "-e", "trace=openat,connect", "-o", "/lab/output/syscalls.log"]
+        cmd += ["strace", "-f", "-s", "256", "-e", "trace=openat,connect,getsockopt,close,?poll,?ppoll",
+                "-o", "/lab/output/syscalls.log"]
     cmd += ["/usr/bin/python3", "/app/worker.py", "/lab/config.json"]
     return cmd

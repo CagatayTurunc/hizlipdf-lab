@@ -9,6 +9,9 @@
     <button class="nav active" id="user-tab"><span>▤</span> Belge dönüştür</button>
     <button class="nav" id="plugins-tab"><span>◈</span> Eklentiler</button>
     <button class="nav" id="observer-tab"><span>◉</span> Deney gözlemcisi</button>
+    <button class="nav" id="comparison-tab"><span>▥</span> Canlı karşılaştırma</button>
+    <button class="nav" id="isolation-tab"><span>⊞</span> İzolasyon inceleyicisi</button>
+    <button class="nav" id="presentation-tab"><span>▸</span> Sunum akışı</button>
     <button class="nav" id="benchmark-tab"><span>📈</span> Karşılaştırma & Benchmark</button>
     <div class="sidebar-bottom"><span class="status-dot"></span> Yerel eğitim laboratuvarı<p>Yalnızca sentetik veriler.<br>Gerçek dönüşüm, görünür kanıt.</p></div>
   </aside>
@@ -52,60 +55,215 @@
     </section>
     <section class="view" id="observer-view" hidden>
       <div class="eyebrow">AYNI ÇALIŞMANIN DİĞER YÜZÜ</div><h1>PDF hazır.<br><span>Peki başka ne oldu?</span></h1>
-      <p class="intro">Eklentinin bildirdiği dosya erişimleri, bağımsız Linux çekirdeği sistem çağrıları (Kernel Syscall) ve alıcının kabul kayıtları.</p>
+      <p class="intro">İşçi bildirimlerini, Linux sistem çağrısı kayıtlarını ve yerel alıcının kabul ettiği istekleri inceleyin.</p>
       <div id="no-run" class="card no-run">Önce Belge dönüştür ekranında bir deney başlatın.</div>
       <div id="evidence-view" hidden>
         <div class="run-strip"><div><span class="muted">ÇALIŞMA</span><code id="run-id"></code></div><div id="run-profile"></div><div class="report-actions"><a id="forensic-report-btn" class="forensic-report-btn" target="_blank">📑 Adli Bilişim Raporu (.html / .pdf) ↗</a><a id="evidence-download" class="text-link">Kanıt JSON’unu indir ↗</a></div></div>
+        <p id="run-verdict" class="lab-note" role="status"></p>
         <div class="metrics"><div class="card metric"><span>PDF çıktısı</span><strong id="metric-pdf">—</strong><small>Uygulama doğrulaması</small></div><div class="card metric"><span>Görev dışı okuma</span><strong id="metric-reads">—</strong><small id="metric-reads-sub">İşçi bildirimi</small></div><div class="card metric"><span>Alıcıya ulaşan kaynak</span><strong id="metric-sources">—</strong><small>Bağımsız alıcı kanıtı</small></div><div class="card metric"><span>İçerik yükü</span><strong id="metric-bytes">—</strong><small>LAB-PING hariç</small></div></div>
-        <div class="evidence-grid"><section class="card"><div class="card-top"><h2>Seçim ve erişim kapsamı</h2></div><div class="selected-file" id="selected-file"></div><div id="access-list"></div><p class="small-note">Okuma sonuçları işçiden gelir. Alıcı kabulü ayrı servis tarafından kaydedilir.</p></section><section class="card receiver-card"><div class="card-top"><h2>Yerel Alıcı & Ağ Trafik İnceleyicisi</h2><span class="receiver-badge" id="network-badge">BAĞIMSIZ AĞ TELEMETRİSİ</span></div><div id="receiver-list"></div><div id="packet-inspector" class="packet-inspector"></div></section></div>
-        <section class="card mitre-card"><div class="card-top"><h2>MITRE ATT&CK® Tehdit Matrisi ve Güvenlik Sınırları</h2><span class="receiver-badge mitre-badge">CYBER THREAT INTEL</span></div><p class="small-note">Deney profilinde simüle edilen zararlı davranışların MITRE ATT&CK kurumsal taktik ve teknikleriyle doğrulanmış güvenlik durumları:</p><div id="mitre-grid" class="mitre-grid"></div></section>
-        <section class="card syscall-card"><div class="card-top"><h2>Linux Çekirdek Sistem Çağrısı Gözlemcisi (Kernel Syscall Audit)</h2><span class="receiver-badge" id="syscall-badge">BAĞIMSIZ ÇEKİRDEK KANITI (strace)</span></div><p class="small-note">İşçi uygulamasının beyanından bağımsız olarak, Linux çekirdeğinin (Kernel) <code>openat()</code> ve <code>connect()</code> sistem çağrı seviyesinde yakalanan adli bilişim kayıtları. İzolasyon doğrudan kernel seviyesinde denetlenir.</p><div id="syscall-terminal" class="syscall-terminal"></div></section>
+        <div class="evidence-grid"><section class="card"><div class="card-top"><h2>Seçim ve erişim kapsamı</h2></div><div class="selected-file" id="selected-file"></div><div id="access-list"></div><p class="small-note">Okuma sonuçları işçiden gelir. Alıcı kabulü ayrı servis tarafından kaydedilir.</p></section><section class="card receiver-card"><div class="card-top"><h2>Alıcı Tarafı HTTP Kaydı</h2></div><div id="receiver-list"></div><div id="packet-inspector" class="packet-inspector"></div></section></div>
+        <section class="card mitre-card"><div class="card-top"><h2>MITRE ATT&CK® Tehdit Matrisi ve Güvenlik Sınırları</h2><span class="receiver-badge mitre-badge">CYBER THREAT INTEL</span></div><p class="small-note">Deneyde gözlemlenen davranışların ilgili ATT&CK teknikleriyle eşlemesi.</p><div id="mitre-grid" class="mitre-grid"></div></section>
+        <section class="card syscall-card"><div class="card-top"><h2>Linux Sistem Çağrısı Kayıtları</h2></div><p class="small-note">Yalnızca sentetik dosyalara ve bu çalışmanın yerel alıcısına ait <code>strace</code> kayıtları. <code>openat()</code> dosya açmayı, eşleşen <code>SO_ERROR</code> kaydı bağlantının nihai soket sonucunu gösterir.</p><div id="syscall-terminal" class="syscall-terminal"></div></section>
         <section class="card events-card"><div class="card-top"><h2>Olay akışı</h2><span class="muted" id="duration"></span></div><div class="table-scroll"><table><thead><tr><th>Süre</th><th>Olay</th><th>Kaynak</th><th>Sonuç</th></tr></thead><tbody id="events"></tbody></table></div></section>
         <div class="lab-note" id="evidence-note"></div>
       </div>
     </section>
+    <section class="view" id="comparison-view" hidden>
+      <h1>Canlı karşılaştırma</h1>
+      <p class="intro">Müşteri teklifinin PDF çıktısını ve arka plan kayıtlarını iki çalışma arasında karşılaştırın.</p>
+      <section class="card comparison-start">
+        <div>
+          <h2>Musteri_Teklifi.docx</h2>
+          <p class="small-note">Örnek belge · İki başlık, sayfa sayısı ve üç tutar kontrol edilir.</p>
+        </div>
+        <div class="comparison-actions">
+          <button class="secondary" id="run-control-btn">Normal ve eğitim eklentisini karşılaştır</button>
+          <button class="primary" id="run-comparison-btn">A ve D’yi karşılaştır <span aria-hidden="true">→</span></button>
+        </div>
+        <p id="comparison-status" class="comparison-status" role="status" hidden></p>
+      </section>
+      <div id="comparison-results" hidden>
+        <p id="comparison-summary" class="comparison-summary" role="status"></p>
+        <div id="comparison-runs" class="comparison-runs"></div>
+      </div>
+      <template id="comparison-card">
+        <section class="card comparison-card">
+          <div class="comparison-card-head">
+            <span class="comparison-profile" data-profile></span>
+            <h2 data-name></h2>
+            <span class="comparison-badge" data-status data-tone="idle"></span>
+          </div>
+          <div class="comparison-document">
+            <p class="comparison-pdf-empty" data-pdf-empty>PDF hazırlanıyor…</p>
+            <div class="comparison-page" data-page hidden><img data-preview></div>
+            <div class="comparison-pdf-text" data-pdf-text hidden>
+              <strong>PDF’den çıkarılan metin</strong><pre></pre>
+            </div>
+            <a class="text-link" data-pdf-link target="_blank" rel="noopener" hidden>PDF’yi aç ↗</a>
+            <ul class="comparison-checks" data-checks hidden></ul>
+          </div>
+          <ol class="comparison-steps" aria-label="Çalışma kanıtları">
+            <li><details data-step="pdf"><summary><span>PDF çıktısı</span><small data-stage></small></summary><div data-detail></div></details></li>
+            <li><details data-step="files"><summary><span>Dosya açma sonucu</span><small data-stage></small></summary><div data-detail></div></details></li>
+            <li><details data-step="network"><summary><span>Yerel alıcıya bağlantı</span><small data-stage></small></summary><div data-detail></div></details></li>
+            <li><details data-step="receiver"><summary><span>Alıcı kaydı</span><small data-stage></small></summary><div data-detail></div></details></li>
+          </ol>
+          <a class="text-link" data-report target="_blank" rel="noopener" hidden>Çalışma raporunu aç ↗</a>
+        </section>
+      </template>
+    </section>
+    <section class="view" id="isolation-view" hidden>
+      <h1>Linux İzolasyon İnceleyicisi</h1>
+      <p class="intro">İşçinin gördüğü sentetik dosya bağlamasını ve yerel alıcıyla aynı ağ ad alanında olup olmadığını inceleyin.</p>
+      <section class="card isolation-controls">
+        <fieldset id="isolation-profiles">
+          <legend>Deney profili</legend>
+          <div class="isolation-options">
+            <label><input type="radio" name="isolation-profile" value="B" checked> <span><strong>B</strong> Dosya erişimi dar</span></label>
+            <label><input type="radio" name="isolation-profile" value="C"> <span><strong>C</strong> Ağ bağlantısı kapalı</span></label>
+          </div>
+        </fieldset>
+        <button class="primary" id="run-isolation-btn">Profili çalıştır <span aria-hidden="true">→</span></button>
+        <p id="isolation-status" role="status" hidden></p>
+      </section>
+
+      <div id="isolation-result" hidden>
+        <div class="isolation-result-head">
+          <h2 id="isolation-result-title"></h2>
+          <a id="isolation-pdf" class="text-link" target="_blank" rel="noopener" hidden>PDF’yi aç ↗</a>
+          <a id="isolation-evidence" class="text-link" target="_blank" rel="noopener" hidden>Kanıt JSON’unu indir ↗</a>
+        </div>
+        <div class="isolation-facts">
+          <section class="card">
+            <h2>Dosya sistemi</h2>
+            <code class="isolation-path">/lab/targets</code>
+            <strong id="isolation-mount-state" class="isolation-value"></strong>
+            <p class="small-note" id="isolation-mount-detail"></p>
+            <p class="isolation-source">Kaynak · İşçinin <code>/proc/self/mountinfo</code> kaydı</p>
+          </section>
+          <section class="card">
+            <h2>Ağ ad alanı</h2>
+            <dl class="isolation-ids">
+              <div><dt>İşçi</dt><dd><code id="isolation-worker-net"></code></dd></div>
+              <div><dt>Yerel alıcı</dt><dd><code id="isolation-receiver-net"></code></dd></div>
+            </dl>
+            <strong id="isolation-net-state" class="isolation-value"></strong>
+            <p class="isolation-source">Kaynak · Her iki süreç için <code>/proc/self/ns/net</code></p>
+          </section>
+        </div>
+        <div class="isolation-facts">
+          <section class="card">
+            <h2>Sentetik dosyalara <code>openat()</code> çağrıları</h2>
+            <div id="isolation-file-calls"></div>
+          </section>
+          <section class="card">
+            <h2>Yerel alıcı gözlemi</h2>
+            <p id="isolation-network-audit"></p>
+            <div id="isolation-network-calls"></div>
+          </section>
+        </div>
+      </div>
+      <details class="card isolation-glossary">
+        <summary>Linux hata kodlarını okuyun</summary>
+        <dl>
+          <dt><code>ENOENT</code></dt><dd>İşçinin gördüğü dosya sisteminde yol çözülemedi.</dd>
+          <dt><code>EACCES</code></dt><dd>Dosya veya yol bileşenlerinden biri için erişim izni reddedildi.</dd>
+        </dl>
+      </details>
+    </section>
+    <section class="view" id="presentation-view" hidden>
+      <h1>Sunum akışı</h1>
+      <p class="intro">Aynı belgeyle başlayın, iki Linux kısıtını canlı inceleyin ve ölçümleri kayıtlı deneyden açın.</p>
+
+      <ol class="presentation-stages">
+        <li class="card presentation-stage">
+          <div>
+            <h2>PDF’ler aynı kontrolleri geçiyor mu?</h2>
+            <p>Profil A’da normal ve eğitim eklentilerini çalıştırın. PDF kontrolleri, dosya açma çağrıları ve yerel alıcı kayıtları üzerinden iki eklentiyi karşılaştırın.</p>
+          </div>
+          <div class="presentation-actions">
+            <button class="primary" id="presentation-control">Kontrol deneyini aç <span aria-hidden="true">→</span></button>
+            <button class="secondary" id="presentation-ad">A/D karşılaştırmasını aç</button>
+          </div>
+        </li>
+        <li class="card presentation-stage">
+          <div>
+            <h2>Alıcıya 0 bayt ulaşırsa hangi kısıt devrededir?</h2>
+            <p>B ve C’yi çalıştırıp önce dosya bağlamasını, ardından ağ ad alanı kimliğini ve soketin nihai sonucunu açın.</p>
+            <details>
+              <summary>Beklenen gözlemleri aç</summary>
+              <p>B’de sentetik dosyalar işçinin görünümüne bağlanmaz. Yerel alıcı bağlantı testini kabul edebilir.</p>
+              <p>C’de hedefler salt okunur bağlıdır. İşçi ile alıcının ağ ad alanı kimlikleri farklıdır. Ulaşma sonucu soket ve alıcı kayıtlarından okunur.</p>
+            </details>
+          </div>
+          <div class="presentation-actions">
+            <button class="primary" id="presentation-isolation">İzolasyon inceleyicisini aç <span aria-hidden="true">→</span></button>
+          </div>
+        </li>
+        <li class="card presentation-stage">
+          <div>
+            <h2>Aynı sonuç beş ölçümde tekrarlandı mı?</h2>
+            <p>Kaydedilen seride PDF kontrollerini, alıcının kabul ettiği baytları ve işlem süresi aralıklarını gösterin.</p>
+          </div>
+          <div class="presentation-actions">
+            <button class="primary" id="presentation-benchmark">Son kayıtlı deneyi aç <span aria-hidden="true">→</span></button>
+          </div>
+        </li>
+      </ol>
+    </section>
     <section class="view" id="benchmark-view" hidden>
       <div class="eyebrow">AKADEMİK DEĞERLENDİRME & BENCHMARK</div>
       <h1>4 Profil Karşılaştırmalı<br><span>Güvenlik ve Performans Analizi</span></h1>
-      <p class="intro">Linux Bubblewrap izolasyon mekanizmalarının (Mount & Network Namespaces) veri sızıntısını engelleme başarımı ve işletim sistemine getirdiği milisaniye bazındaki gecikme (overhead) maliyetinin karşılaştırmalı deneysel ölçümü.</p>
+      <p class="intro">Aynı belge ve eğitim eklentisiyle dört Linux profilini karşılaştırın. Dosya ve ağ gözlemleri ile çalışma süreleri profil bazında özetlenir.</p>
 
       <section class="card benchmark-action-card">
         <div class="benchmark-action-flex">
           <div>
-            <h2>Otomatik Karşılaştırmalı Deney Motoru</h2>
-            <p class="small-note">Tek tıkla Profil A, B, C ve D'yi sırasıyla çalıştırır; bağımsız işletim sistemi telemetrisiyle sızan veri miktarını ve işlem gecikmelerini ölçer.</p>
+            <h2>Deney düzeni</h2>
+            <p class="small-note">Profil başına bir ısınma ve beş ölçüm yapılır. Profil sırası her turda döner. Özetlerde medyan, minimum–maksimum ve geçerli ölçüm sayısı gösterilir.</p>
           </div>
           <button class="primary benchmark-start-btn" id="run-benchmark-btn">▶ Karşılaştırmalı Deneyi Başlat (A, B, C, D)</button>
         </div>
         <div id="benchmark-progress" class="benchmark-progress-container" hidden>
-          <div class="benchmark-progress-label"><span id="benchmark-status-text">Deney başlatılıyor...</span><strong id="benchmark-pct">0%</strong></div>
+          <div class="benchmark-progress-label" role="status"><span id="benchmark-status-text">Deney başlatılıyor…</span><strong id="benchmark-pct">%0</strong></div>
           <div class="progress-track"><div id="benchmark-bar-fill" class="progress-fill"></div></div>
+          <button class="secondary benchmark-retry" id="benchmark-save-retry" hidden>Kaydetmeyi yeniden dene</button>
         </div>
       </section>
 
+      <section class="card benchmark-history">
+        <div>
+          <label for="benchmark-history-list">Kayıtlı deney</label>
+          <select id="benchmark-history-list"><option value="">Kayıt aranıyor…</option></select>
+        </div>
+        <button class="secondary" id="benchmark-history-open" disabled>Kaydı aç</button>
+        <p id="benchmark-history-status" role="status" hidden></p>
+      </section>
+
       <div id="benchmark-results" hidden>
+        <div class="benchmark-saved-head">
+          <div><h2 id="benchmark-result-title"></h2><p id="benchmark-result-detail" class="small-note"></p></div>
+          <a class="secondary benchmark-download" id="benchmark-evidence">Kanıt paketini indir ↓</a>
+        </div>
         <div class="benchmark-cols-grid" id="benchmark-cols"></div>
 
         <div class="benchmark-charts-grid">
           <section class="card chart-card">
-            <div class="card-top"><h2>Sızdırılan Hassas Veri Miktarı (Bayt)</h2><span class="muted">DÜŞÜK OLMASI İYİDİR</span></div>
-            <p class="small-note">Alıcı C2 servisi tarafından kabul edilen görev dışı sentetik veri yükü.</p>
+            <div class="card-top"><h2>Kabul edilen içeriğin medyanı</h2></div>
+            <p class="small-note">Yerel alıcının kabul ettiği görev dışı sentetik içerik, bayt cinsinden.</p>
             <div class="chart-bars" id="chart-data-leak"></div>
           </section>
 
           <section class="card chart-card">
-            <div class="card-top"><h2>İşlem Süresi & İzolasyon Gecikmesi (Latency ms)</h2><span class="muted">GÜVENLİK MALİYETİ</span></div>
-            <p class="small-note">Worker süreci ve PDF dönüşümü için geçen toplam yürütme süresi.</p>
+            <div class="card-top"><h2>Toplam sürenin medyanı</h2></div>
+            <p class="small-note">Tamamlanan çalışmalar için toplam sunucu süresi, milisaniye cinsinden.</p>
             <div class="chart-bars" id="chart-latency"></div>
           </section>
         </div>
 
         <section class="card benchmark-conclusion-card">
-          <div class="card-top"><h2>Akademik Bulgular ve Savunma Özeti</h2><span class="receiver-badge">JÜRİ DEĞERLENDİRMESİ</span></div>
-          <div class="conclusion-grid">
-            <div class="conclusion-item"><strong>Güvenlik Etkinliği:</strong><p>Profil D (Tam İzolasyon) altında veri sızıntısı <strong>%100 oranında (0 bayt)</strong> engellenmiştir. Linux Mount ve Network Namespace'leri birlikte uygulandığında trojan eklentisi hiçbir hassas bilgiye ulaşamamıştır.</p></div>
-            <div class="conclusion-item"><strong>Performans Maliyeti (Overhead):</strong><p id="overhead-summary-text">Bubblewrap hafif konteynerizasyonunun sisteme getirdiği ek gecikme maliyeti yalnızca <strong>~15-35 ms (%2-%4)</strong> civarındadır. Bu deneysel sonuç, üretim ortamlarında tam izolasyonun ihmal edilebilir bir performans maliyetiyle maksimum koruma sağladığını kanıtlar.</p></div>
-          </div>
+          <div class="card-top"><h2>Gözlemlenen süre farkı</h2></div>
+          <p id="overhead-summary-text" class="small-note"></p>
         </section>
       </div>
     </section>

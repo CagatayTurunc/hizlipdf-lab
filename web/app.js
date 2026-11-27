@@ -1,28 +1,41 @@
 const $ = (id) => document.getElementById(id);
 let file = null, health = null, currentRun = null, busy = false, plugins = [], pluginBusy = false;
-const PROFILES = {
-  A: { name: 'Geniş laboratuvar yetkisi', files: true, network: true },
-  B: { name: 'Dosya erişimi dar', files: false, network: true },
-  C: { name: 'Ağ bağlantısı kapalı', files: true, network: false },
-  D: { name: 'Dosya ve ağ kısıtlı', files: false, network: false }
-};
-const names = {PROCESS_STARTED:'İşçi başladı',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Bağımsız bağlantı testi',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
-const results = {ok:'Başarılı (işçi)',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
+let benchmarkRunning = false, comparisonRunning = false, isolationRunning = false;
+let openingBenchmark = false;
+let pendingBenchmark = null;
+const syscallLabels = { allowed: 'BAŞARILI', error: 'HATA', pending: 'BAĞLANTI BEKLEMEDE' };
+const names = {PROCESS_STARTED:'İşçi başladı',ISOLATION_OBSERVED:'Linux ad alanı gözlemi',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Yerel bağlantı testi',LAB_PROBE_FINISHED:'Ek deney adımı tamamlandı',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
+const results = {ok:'Başarılı (işçi)',partial:'Bazı kayıtlar alınamadı',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
 
 Object.assign(names,{PLUGIN_LOADED:'Kurulu paket yüklendi',PLUGIN_FAILED:'Paket yüklenemedi',ANALYSIS_FINISHED:'Belge analiz edildi'});
 function view(name) {
-  for (const key of ['user','plugins','observer','benchmark']) {
+  for (const key of ['user','plugins','observer','comparison','isolation','presentation','benchmark']) {
     const el = $(key+'-view'), tab = $(key+'-tab');
     if (el) el.hidden = key !== name;
     if (tab) tab.classList.toggle('active', key === name);
   }
+  window.scrollTo(0, 0);
 }
 $('user-tab').onclick = () => view('user');
 $('plugins-tab').onclick = $('manage-plugins').onclick = () => view('plugins');
 $('observer-tab').onclick = $('reveal-button').onclick = () => view('observer');
-$('benchmark-tab').onclick = () => view('benchmark');
+$('benchmark-tab').onclick = () => {
+  view('benchmark');
+  refreshBenchmarkHistory();
+};
+$('comparison-tab').onclick = () => view('comparison');
+$('isolation-tab').onclick = () => view('isolation');
+$('presentation-tab').onclick = () => view('presentation');
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
-function refreshButton() { $('convert-button').disabled = busy || !file || !health?.converter || !$('plugin').value; }
+function runInProgress() { return busy || benchmarkRunning || comparisonRunning || isolationRunning; }
+function refreshButton() {
+  const active = runInProgress();
+  $('convert-button').disabled = active || !file || !health?.converter || !$('plugin').value;
+  $('run-control-btn').disabled = $('run-comparison-btn').disabled = $('run-isolation-btn').disabled = active;
+  $('run-benchmark-btn').disabled = active || openingBenchmark;
+  $('benchmark-history-open').disabled = benchmarkRunning || openingBenchmark || !$('benchmark-history-list').value;
+  $('benchmark-save-retry').disabled = benchmarkRunning;
+}
 $('plugin').onchange = refreshButton;
 function selectFile(next) {
   if (busy) return;
@@ -61,7 +74,7 @@ async function init() {
 }
 function base64File(selected) { return new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(Error('Dosya okunamadı.')); reader.readAsDataURL(selected); }); }
 $('convert-button').onclick = async () => {
-  if (busy || !file) return;
+  if (runInProgress() || !file) return;
   busy = true; refreshButton(); error(''); document.body.classList.add('busy');
   $('sample-button').disabled = $('plugin').disabled = $('profile').disabled = $('file-input').disabled = true;
   $('output-empty').hidden = false; $('output-ready').hidden = true; $('pdf-preview').removeAttribute('src');
@@ -89,12 +102,26 @@ $('convert-button').onclick = async () => {
   finally { busy = false; document.body.classList.remove('busy'); $('sample-button').disabled = $('plugin').disabled = $('profile').disabled = $('file-input').disabled = false; refreshButton(); }
 };
 function element(tag, text, cls) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; }
+function socketResultLabel(call) {
+  return `Nihai soket sonucu · SO_ERROR = ${call.errno || '0'}`;
+}
+function networkTraceBlocks(calls) {
+  return calls.filter(call => call.kind === 'connect' || call.kind === 'so_error').map(call => {
+    const block = element('div', undefined, 'network-evidence-block');
+    const label = call.kind === 'so_error' ? socketResultLabel(call) : 'Bağlantı girişimi · connect()';
+    block.append(element('small', label), element('pre', call.raw, 'comparison-trace'));
+    return block;
+  });
+}
 function renderEvidence(data) {
   $('no-run').hidden = true; $('evidence-view').hidden = false;
   $('run-id').textContent = data.run_id; $('run-profile').textContent = `Profil ${data.profile} · ${data.plugin_manifest?.name || data.plugin} · v${data.plugin_manifest?.version || '0.1'}`;
   $('evidence-download').href = `/api/runs/${data.run_id}/evidence`;
   if ($('forensic-report-btn')) $('forensic-report-btn').href = `/api/runs/${data.run_id}/report`;
-  $('metric-pdf').textContent = data.pdf ? 'Hazır' : data.status === 'failed' ? 'Hata' : 'İşleniyor';
+  $('run-verdict').textContent = data.verdict
+    ? `${data.verdict.label} · ${data.verdict.summary}`
+    : 'Doğrulanmadı · Deney kaydı henüz tamamlanmadı.';
+  $('metric-pdf').textContent = data.pdf && data.status === 'completed' ? 'Hazır' : data.status === 'failed' ? 'Hata' : 'İşleniyor';
   $('metric-reads').textContent = data.metrics?.read_sources_worker_reported ?? '—';
   $('metric-sources').textContent = data.receiver.filter(e=>e.kind==='CONTENT').length;
   $('metric-bytes').textContent = `${data.receiver.reduce((s,e)=>s+e.accepted_bytes,0)} B`;
@@ -104,74 +131,41 @@ function renderEvidence(data) {
   if (!reads.length) $('access-list').append(element('p',data.plugin==='normal' ? 'Normal eklenti: ek erişim denenmez.' : 'Okuma sonucu henüz yok.','empty-record'));
   for (const entry of reads) { const row = element('div',undefined,'access-row'); row.append(element('strong',entry.source)); row.append(element('span', entry.result==='ok' ? 'GÖREV DIŞI · Okundu (işçi bildirimi)' : `GÖREV DIŞI · ${entry.error || entry.result}`)); $('access-list').append(row); }
   $('receiver-list').replaceChildren();
-  if (data.receiver.some(e=>e.kind==='LAB_PING')) $('receiver-list').append(element('div','● LAB-PING kabul edildi · ağ yolu açık','ping'));
+  if (data.receiver.some(e=>e.kind==='LAB_PING')) $('receiver-list').append(element('div','● LAB-PING yerel alıcı tarafından kabul edildi','ping'));
   const contents = data.receiver.filter(e=>e.kind==='CONTENT');
   if (!contents.length) $('receiver-list').append(element('p','Görev dışı içerik kabul kaydı yok. Bu durum tek başına ağın engellendiğini kanıtlamaz.','empty-record'));
   for (const entry of contents) { const card = element('div',undefined,'receiver-record'); card.append(element('strong',entry.source)); card.append(element('pre',entry.content)); card.append(element('small',`${entry.accepted_bytes} bayt · Alıcı tarafından kabul edildi`)); $('receiver-list').append(card); }
-  const pktContainer = $('packet-inspector');
-  if (pktContainer) {
-    pktContainer.replaceChildren();
-    const netAudit = data.network_audit || {};
-    const packets = (data.receiver || []).filter(e => e.raw_http);
-    if (netAudit.status === 'blocked' || (data.profile && PROFILES[data.profile] && !PROFILES[data.profile].network)) {
-      const blockedCard = element('div', undefined, 'packet-card blocked-packet');
-      blockedCard.innerHTML = `
-        <div class="packet-header">
-          <span class="packet-method-badge blocked">AĞ ENGELLENDİ</span>
-          <span class="packet-uri">TCP / IP İletişimi Reddedildi</span>
-          <span class="packet-time">0 Paket · 0 Bayt</span>
-        </div>
-        <p class="packet-explain"><strong>Linux Network Namespace (--unshare-net)</strong> devrede olduğu için işlem ağ kartına (loopback dahil) erişememiş, işletim sistemi seviyesinde soket bağlantısı engellenmiştir.</p>
-        <pre class="packet-trace-pre">${netAudit.trace || 'socket(AF_INET, SOCK_STREAM) -> connect() = -1 ENETUNREACH'}</pre>
-      `;
-      pktContainer.append(blockedCard);
-    } else if (!packets.length) {
-      const noPkt = element('div', undefined, 'packet-card');
-      noPkt.innerHTML = `
-        <div class="packet-header">
-          <span class="packet-method-badge allowed">AĞ AÇIK</span>
-          <span class="packet-uri">İletişim Bekleniyor</span>
-        </div>
-        <p class="packet-explain">${data.plugin === 'normal' ? 'Normal referans eklentisi veri sızdırma teşebbüsünde bulunmadı.' : 'Herhangi bir HTTP isteği yakalanmadı.'}</p>
-        <pre class="packet-trace-pre">${netAudit.trace || 'socket(AF_INET, SOCK_STREAM) = 5 (Hazır)'}</pre>
-      `;
-      pktContainer.append(noPkt);
-    } else {
-      const title = element('h4', 'CANLI AĞ PAKETİ İNCELEYİCİSİ (RAW HTTP / HEX)', 'packet-section-title');
-      pktContainer.append(title);
-      packets.forEach((pkt, idx) => {
-        const card = element('div', undefined, 'packet-card');
-        const header = element('div', undefined, 'packet-header');
-        header.innerHTML = `
-          <span class="packet-method-badge allowed">POST</span>
-          <span class="packet-uri">/collect (${pkt.kind === 'LAB_PING' ? 'LAB_PING' : pkt.source})</span>
-          <div class="packet-tabs">
-            <button class="packet-tab-btn active" data-target="raw-${idx}">Formatlı HTTP</button>
-            <button class="packet-tab-btn" data-target="hex-${idx}">Hex Dökümü</button>
-          </div>
-        `;
-        const rawBox = element('pre', pkt.raw_http, 'packet-body-pre');
-        rawBox.id = `raw-${idx}`;
-        const hexBox = element('pre', pkt.hex_dump || 'Hexdump mevcut değil.', 'packet-body-pre hexdump-pre');
-        hexBox.id = `hex-${idx}`;
-        hexBox.hidden = true;
-        header.querySelectorAll('.packet-tab-btn').forEach(btn => {
-          btn.onclick = (e) => {
-            e.stopPropagation();
-            header.querySelectorAll('.packet-tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const target = btn.dataset.target;
-            rawBox.hidden = target !== `raw-${idx}`;
-            hexBox.hidden = target !== `hex-${idx}`;
-          };
-        });
-        card.append(header, rawBox, hexBox);
-        pktContainer.append(card);
-      });
-    }
+  const inspector = $('packet-inspector');
+  inspector.replaceChildren();
+  inspector.append(element('p', data.network_audit?.summary || 'Bağlantı sonucu doğrulanmadı.', 'small-note'));
+  const requests = data.receiver.filter(entry => entry.http_record);
+  if (requests.length) {
+    inspector.append(element('p', 'Görünüm kabul edilen istekten yeniden oluşturulur. Çalışma anahtarı çıkarılır. Hex dökümü bu görünümün ilk 512 baytını gösterir.', 'small-note'));
   }
-  if ($('metric-reads-sub')) {
-    $('metric-reads-sub').textContent = data.independent_file_observer ? '✓ Çekirdek (strace) ile doğrulandı' : 'İşçi bildirimi';
+  for (const request of requests) {
+    const card = element('section', undefined, 'packet-card');
+    const header = element('div', undefined, 'packet-header');
+    const tabs = element('div', undefined, 'packet-tabs');
+    const textButton = element('button', 'HTTP görünümü', 'packet-tab-btn active');
+    const hexButton = element('button', 'Hex dökümü', 'packet-tab-btn');
+    const http = element('pre', request.http_record, 'packet-body-pre');
+    const hex = element('pre', request.http_record_hex, 'packet-body-pre hexdump-pre');
+    function showHex(show) {
+      http.hidden = show;
+      hex.hidden = !show;
+      textButton.classList.toggle('active', !show);
+      hexButton.classList.toggle('active', show);
+      textButton.setAttribute('aria-pressed', String(!show));
+      hexButton.setAttribute('aria-pressed', String(show));
+    }
+    showHex(false);
+    textButton.onclick = () => showHex(false);
+    hexButton.onclick = () => showHex(true);
+    tabs.append(textButton, hexButton);
+    header.append(element('span', 'POST', 'packet-method-badge allowed'),
+      element('span', `/collect · ${request.source || request.kind}`, 'packet-uri'), tabs);
+    card.append(header, http, hex);
+    inspector.append(card);
   }
   const mitreGrid = $('mitre-grid');
   if (mitreGrid) {
@@ -202,11 +196,12 @@ function renderEvidence(data) {
     term.replaceChildren();
     const syscalls = data.syscalls || [];
     if (!syscalls.length) {
-      term.append(element('p', data.plugin === 'normal' ? 'Normal referans eklentisi: görev dışı sistem çağrısı yürütülmedi.' : 'Sistem çağrısı kaydı bulunamadı.', 'empty-record'));
+      term.append(element('p', 'İlgili sistem çağrısı kaydı bulunamadı.', 'empty-record'));
     } else {
       for (const call of syscalls) {
         const line = element('div', undefined, 'syscall-line');
-        const badge = element('span', call.status === 'allowed' ? 'İZİN VERİLDİ' : 'ENGELLEME', `syscall-badge ${call.status}`);
+        const label = call.kind === 'so_error' ? socketResultLabel(call) : syscallLabels[call.status] || 'SONUÇ BELİRSİZ';
+        const badge = element('span', label, `syscall-badge ${call.status}`);
         const text = element('span', call.raw, 'syscall-text');
         line.append(badge, text);
         term.append(line);
@@ -217,7 +212,7 @@ function renderEvidence(data) {
   for (const entry of data.events) { const tr = element('tr'); for (const value of [`${entry.elapsed_ms} ms`,names[entry.event]||entry.event,entry.source||'—',results[entry.result]||entry.result]) tr.append(element('td',value)); $('events').append(tr); }
   for (const entry of data.receiver) { const tr = element('tr'); for (const value of ['Alıcı',entry.kind==='LAB_PING'?'Bağlantı testi kabulü':'İçerik kabulü',entry.source||'LAB-PING','Bağımsız servis kaydı']) tr.append(element('td',value)); $('events').append(tr); }
   $('duration').textContent = data.total_ms ? `${data.total_ms} ms toplam` : 'Devam ediyor';
-  $('evidence-note').textContent = `${data.sandbox_applied ? 'Linux bubblewrap uygulandı.' : 'Bu çalışma OS izolasyonu olmadan yürütüldü.'} ${data.independent_file_observer ? 'Sistem çağrıları (openat/connect) Linux çekirdeği düzeyinde strace ile bağımsız gözlemlenip adli kanıt olarak kaydedilmiştir.' : 'Dosya okumaları işçi bildirimidir.'}`;
+  $('evidence-note').textContent = data.file_audit?.summary || 'Dosya açma sonucu doğrulanmadı.';
 }
 function renderAnalysis(analysis) {
   $('analysis-summary').replaceChildren();
@@ -268,164 +263,565 @@ async function pluginAction(action) {
 }
 $('plugin-upload-button').onclick=()=>$('plugin-file').click();
 $('plugin-file').onchange=(event)=>{ const selected=event.target.files[0]; if(selected) pluginAction(async()=>{await installBlob(selected); return 'Seçilen paket doğrulandı ve kuruldu.';}); event.target.value=''; };
-let benchmarkRunning = false;
-async function runBenchmark() {
-  if (benchmarkRunning) return;
-  benchmarkRunning = true;
-  $('run-benchmark-btn').disabled = true;
-  $('benchmark-progress').hidden = false;
-  $('benchmark-results').hidden = true;
+async function runTrial(profile, documentData, {pluginId = 'hizlipdf.education', onUpdate} = {}) {
+  const { run_id: runId } = await json('/api/runs', {
+    method: 'POST',
+    signal: AbortSignal.timeout(10000),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...documentData, profile, plugin_id: pluginId })
+  });
+  const deadline = Date.now() + 95000;
+  try {
+    while (Date.now() < deadline) {
+      const data = await json(`/api/runs/${runId}`, { signal: AbortSignal.timeout(5000) });
+      onUpdate?.(data);
+      if (data.status === 'completed' || data.status === 'failed') return data;
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+    return { run_id: runId, status: 'unknown', error: 'Çalışma zamanında doğrulanamadı.' };
+  } catch (err) {
+    return { run_id: runId, status: 'unknown', error: err.message };
+  }
+}
+
+const isolationRuns = new Map();
+const openErrors = {
+  ENOENT: 'Yol işçinin dosya görünümünde bulunamadı.',
+  EACCES: 'Dosya veya yol bileşenlerinden biri için erişim izni reddedildi.',
+  EPERM: 'İşleme izin verilmedi.'
+};
+
+function renderIsolation(profile, data) {
+  $('isolation-result').hidden = !data;
+  if (!data) return;
+  const active = ['queued', 'running'].includes(data.status);
+  const missing = active ? 'Kayıt bekleniyor' : 'Doğrulanmadı';
+  const observation = data.isolation;
+  const mount = observation?.target_mount;
+  let mountState = missing;
+  let mountDetail = '';
+  if (mount?.present === false) {
+    mountState = 'Hedefler bağlanmamış';
+    mountDetail = 'İşçinin bağlama tablosunda /lab/targets için ayrı bir kayıt yok.';
+  } else if (mount?.present) {
+    mountState = 'Bağlama mevcut';
+    const mode = mount.read_only === true ? 'Salt okunur (ro)'
+      : mount.read_only === false ? 'Okunur-yazılır (rw)' : 'Bağlama kipi doğrulanmadı';
+    mountDetail = mount.id ? `${mode} · Bağlama kimliği ${mount.id}` : mode;
+  }
+  $('isolation-mount-state').textContent = mountState;
+  $('isolation-mount-detail').textContent = mountDetail;
+  $('isolation-worker-net').textContent = observation?.worker_network?.id || '—';
+  $('isolation-receiver-net').textContent = observation?.receiver_network?.id || '—';
+  const relations = {shared: 'Aynı ağ ad alanı', separate: 'Ayrı ağ ad alanları'};
+  $('isolation-net-state').textContent = relations[observation?.network_relation] || missing;
+
+  const states = {queued: 'Sırada', running: 'Çalışıyor', completed: 'Tamamlandı', failed: 'Başarısız'};
+  $('isolation-result-title').textContent = `Profil ${profile} · ${states[data.status] || 'Doğrulanmadı'}`;
+  const pdf = $('isolation-pdf');
+  pdf.hidden = !(data.status === 'completed' && data.pdf?.structurally_valid);
+  if (!pdf.hidden) pdf.href = data.pdf.url;
+  const evidence = $('isolation-evidence');
+  evidence.hidden = active || !data.run_id;
+  if (!evidence.hidden) evidence.href = `/api/runs/${data.run_id}/evidence`;
+
+  const calls = data.syscalls || [];
+  const openCalls = calls.filter(call => call.kind === 'openat');
+  const container = $('isolation-file-calls');
+  container.replaceChildren();
+  if (!openCalls.length) {
+    container.append(element('p', active ? missing : 'İlgili openat() kaydı bulunamadı. Sonuç doğrulanmadı.'));
+  }
+  for (const call of openCalls) {
+    const title = call.errno ? `${call.source} · ${call.errno}` : call.source;
+    container.append(element('strong', title), element('pre', call.raw, 'comparison-trace'));
+    if (openErrors[call.errno]) container.append(element('p', openErrors[call.errno]));
+  }
+
+  const ping = (data.receiver || []).some(entry => entry.kind === 'LAB_PING');
+  const summary = data.network_audit?.summary || (active ? 'Bağlantı kaydı bekleniyor.' : 'Bağlantı sonucu doğrulanmadı.');
+  $('isolation-network-audit').textContent = ping ? 'Yerel alıcı LAB-PING kaydını kabul etti.' : summary;
+  $('isolation-network-calls').replaceChildren(...networkTraceBlocks(calls));
+}
+
+$('isolation-profiles').onchange = (event) => {
+  $('isolation-status').hidden = true;
+  renderIsolation(event.target.value, isolationRuns.get(event.target.value));
+};
+
+$('run-isolation-btn').onclick = async () => {
+  if (runInProgress()) return;
+  const radio = $('isolation-profiles').querySelector('input:checked');
+  const profile = radio.value;
+  const status = $('isolation-status');
+  isolationRunning = true;
+  $('isolation-profiles').disabled = true;
+  refreshButton();
+  status.textContent = 'Linux ortamı ve eğitim eklentisi kontrol ediliyor…';
+  status.hidden = false;
+  try {
+    const [environment, catalog] = await Promise.all([json('/api/health'), json('/api/plugins')]);
+    if (!environment.converter || !environment.profiles.some(entry => entry.id === profile && entry.available)) {
+      throw Error('Bu profil için çalışan Linux Bubblewrap ortamı ve LibreOffice gerekli.');
+    }
+    if (!catalog.plugins.some(plugin => plugin.id === 'hizlipdf.education' && plugin.installed)) {
+      throw Error('Eklentiler ekranından eğitim paketini kurun.');
+    }
+    status.hidden = true;
+    renderIsolation(profile, {status: 'queued'});
+    let run;
+    try {
+      run = await runTrial(profile, {sample: true}, {onUpdate: data => renderIsolation(profile, data)});
+    } catch (err) {
+      run = {status: 'unknown', error: err.message};
+    }
+    isolationRuns.set(profile, run);
+    renderIsolation(profile, run);
+    if (run.error) {
+      status.textContent = run.error;
+      status.hidden = false;
+    }
+  } catch (err) {
+    status.textContent = err.message;
+    status.hidden = false;
+  } finally {
+    isolationRunning = false;
+    $('isolation-profiles').disabled = false;
+    refreshButton();
+  }
+};
+
+async function runComparison(control) {
+  if (runInProgress()) return;
+  comparisonRunning = true;
+  refreshButton();
+  const status = $('comparison-status');
+  status.textContent = 'Linux ortamı ve kurulu eklenti kontrol ediliyor…';
+  status.hidden = false;
+  $('comparison-results').hidden = true;
 
   try {
-    let sampleData = file;
-    if (!sampleData) {
-      $('benchmark-status-text').textContent = 'Örnek test belgesi hazırlanıyor...';
-      const resp = await fetch('/api/sample');
-      if (!resp.ok) throw Error('Örnek belge alınamadı.');
-      sampleData = new File([await resp.blob()], 'Musteri_Teklifi.docx');
+    const [environment, catalog] = await Promise.all([json('/api/health'), json('/api/plugins')]);
+    const matchups = control
+      ? [{id: 'A', plugin: 'normal', name: 'Normal referans'}, {id: 'A', plugin: 'education', name: 'Eğitim eklentisi'}]
+      : ['A', 'D'].map(id => ({id, plugin: 'education', name: environment.profiles.find(profile => profile.id === id)?.name}));
+    if (!environment.converter || matchups.some(side => !environment.profiles.some(profile => profile.id === side.id && profile.available))) {
+      throw Error(control ? 'Kontrol deneyi için LibreOffice gerekli.'
+        : 'A ve D karşılaştırması için çalışan Linux Bubblewrap ortamı ve LibreOffice gerekli.');
+    }
+    if (matchups.some(side => !catalog.plugins.some(plugin => plugin.id === `hizlipdf.${side.plugin}` && plugin.installed))) {
+      throw Error(control ? 'Eklentiler ekranından normal ve eğitim paketlerini kurun.'
+        : 'Eklentiler ekranından eğitim paketini kurun.');
     }
 
-    const base64 = await base64File(sampleData);
-    const profiles = [
-      { id: 'A', name: 'Profil A', desc: 'Geniş Yetki', color: 'danger' },
-      { id: 'B', name: 'Profil B', desc: 'Dosya Kısıtlı', color: 'warning' },
-      { id: 'C', name: 'Profil C', desc: 'Ağ Kısıtlı', color: 'warning' },
-      { id: 'D', name: 'Profil D', desc: 'Tam İzolasyon', color: 'success' },
-    ];
+    const columns = $('comparison-runs');
+    columns.replaceChildren();
+    const cards = matchups.map(side => {
+      const card = $('comparison-card').content.firstElementChild.cloneNode(true);
+      card.querySelector('[data-profile]').textContent = side.id;
+      card.querySelector('[data-name]').textContent = side.name;
+      card.querySelector('[data-preview]').alt = `Profil ${side.id} · ${side.name} PDF çıktısının ilk sayfası`;
+      renderComparisonRun(card, { status: 'queued' });
+      columns.append(card);
+      return card;
+    });
+    $('comparison-summary').textContent = 'İki çalışma için PDF ve gözlem kayıtları bekleniyor.';
+    $('comparison-results').hidden = false;
+    status.hidden = true;
 
-    const results = {};
-
-    for (let i = 0; i < profiles.length; i++) {
-      const p = profiles[i];
-      const pct = Math.round((i / profiles.length) * 100);
-      $('benchmark-pct').textContent = `${pct}%`;
-      $('benchmark-bar-fill').style.width = `${pct}%`;
-      $('benchmark-status-text').textContent = `${p.name} (${p.desc}) çalıştırılıyor ve çekirdek telemetrisi ölçülüyor...`;
-
-      const runResp = await json('/api/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          profile: p.id,
-          plugin_id: 'hizlipdf.education',
-          filename: sampleData.name,
-          content_base64: base64,
-        }),
-      });
-
-      const runId = runResp.run_id;
-      let runData = null;
-      while (true) {
-        await new Promise((r) => setTimeout(r, 350));
-        runData = await json(`/api/runs/${runId}`);
-        if (runData.status === 'completed' || runData.status === 'failed') break;
+    const runs = await Promise.all(matchups.map(async (side, index) => {
+      const card = cards[index];
+      let run;
+      try {
+        run = await runTrial(side.id, { sample: true }, {
+          pluginId: `hizlipdf.${side.plugin}`, onUpdate: data => renderComparisonRun(card, data)
+        });
+      } catch (err) {
+        run = { status: 'unknown', error: err.message };
       }
-      results[p.id] = runData;
+      renderComparisonRun(card, run);
+      return run;
+    }));
+    const [left, right] = runs;
+    const validMatch = Boolean(left.input_sha256 && left.input_sha256 === right.input_sha256)
+      && runs.every((run, index) => run.profile === matchups[index].id && run.plugin === matchups[index].plugin)
+      && Boolean(left.package_sha256 && right.package_sha256)
+      && (control ? left.package_sha256 !== right.package_sha256 : left.package_sha256 === right.package_sha256);
+    const design = control ? 'Profil A’da aynı DOCX iki farklı eklentiyle işlendi.'
+      : 'Aynı DOCX ve eklenti kullanıldı.';
+    let conclusion = 'Karşılaştırma doğrulanmadı. Her iki çalışma için geçerli PDF ve referans kontrolü gerekli.';
+    if (runs.every(run => run.status === 'completed' && run.pdf?.sample_validation)) {
+      if (!validMatch) {
+        conclusion = 'Karşılaştırma doğrulanmadı. Belge, eklenti veya profil deney düzeniyle eşleşmedi.';
+      } else if (runs.every(run => run.pdf.sample_validation.passed)) {
+        conclusion = `${design} İki PDF de örnek belgenin ${left.pdf.sample_validation.checks.length} kontrolünü geçti.`;
+      } else {
+        conclusion = `${design} Farklı çıkan PDF kontrolleri ilgili sütunda işaretlendi.`;
+      }
     }
-
-    $('benchmark-pct').textContent = '100%';
-    $('benchmark-bar-fill').style.width = '100%';
-    $('benchmark-status-text').textContent = 'Tüm testler tamamlandı! Analiz grafikleri hazır.';
-
-    renderBenchmarkResults(profiles, results);
+    $('comparison-summary').textContent = conclusion;
   } catch (err) {
-    alert('Benchmark hatası: ' + err.message);
+    status.textContent = err.message;
+    status.hidden = false;
+  } finally {
+    comparisonRunning = false;
+    refreshButton();
+  }
+}
+
+function renderComparisonRun(card, data) {
+  const find = selector => card.querySelector(selector);
+  const active = ['queued', 'running'].includes(data.status);
+  const status = find('[data-status]');
+  const statuses = {
+    queued: 'Sırada', running: 'Çalışıyor', completed: 'Tamamlandı', failed: 'Başarısız', unknown: 'Doğrulanmadı'
+  };
+  status.textContent = statuses[data.status];
+  status.dataset.tone = data.status;
+  const pending = active ? 'Kayıt bekleniyor' : 'Doğrulanmadı';
+  const events = data.events || [];
+  const receiver = data.receiver || [];
+  const calls = data.syscalls || [];
+  const conversion = events.find(event => event.event === 'CONVERSION_FINISHED');
+  const pdf = data.status === 'completed' && data.pdf?.structurally_valid ? data.pdf : null;
+
+  const empty = find('[data-pdf-empty]');
+  empty.hidden = Boolean(pdf);
+  empty.textContent = active ? 'PDF hazırlanıyor…' : data.error || 'Doğrulanmış PDF yok.';
+  const link = find('[data-pdf-link]');
+  if (pdf && link.hidden) {
+    const preview = find('[data-preview]');
+    const imagePage = find('[data-page]');
+    const extracted = find('[data-pdf-text]');
+    extracted.querySelector('pre').textContent = pdf.text_excerpt || 'PDF metni çıkarılamadı.';
+    if (pdf.preview_url) {
+      preview.onerror = () => {
+        imagePage.hidden = true;
+        extracted.hidden = false;
+      };
+      preview.src = pdf.preview_url;
+      imagePage.hidden = false;
+    } else {
+      extracted.hidden = false;
+    }
+    link.href = pdf.url;
+    link.hidden = false;
+    const checks = find('[data-checks]');
+    for (const check of pdf.sample_validation?.checks || []) {
+      const label = element('span', check.label);
+      const value = element('strong', check.matched
+        ? String(check.actual)
+        : `${check.actual ?? 'Bulunamadı'} · Beklenen ${check.expected}`);
+      const row = element('li');
+      row.dataset.match = String(check.matched);
+      row.append(label, value);
+      checks.append(row);
+    }
+    checks.hidden = !checks.childElementCount;
+  }
+
+  function stage(key, label, details) {
+    const row = find(`[data-step="${key}"]`);
+    row.querySelector('[data-stage]').textContent = label;
+    row.querySelector('[data-detail]').replaceChildren(...details);
+  }
+  function trace(kind) {
+    const lines = calls.filter(call => call.kind === kind);
+    return lines.length
+      ? [element('pre', lines.map(call => call.raw).join('\n'), 'comparison-trace')]
+      : [element('p', active ? 'Çekirdek kaydı çalışma sonunda eklenir.' : 'İlgili sistem çağrısı kaydı yok.')];
+  }
+
+  const pdfStatus = pdf ? 'PDF üretildi' : conversion?.result === 'ok' && active ? 'İşçi PDF üretti' : pending;
+  stage('pdf', pdfStatus, [element('p', pdf
+    ? `PDF sunucuda yapısal kontrolden geçti · ${pdf.pages} sayfa.`
+    : data.error || (conversion?.result === 'ok' && active ? 'Sunucunun PDF doğrulaması bekleniyor.' : pending))]);
+
+  const fileLabels = { opened: 'Dosyalar açıldı', unavailable: 'Dosyalar açılamadı', not_attempted: 'Denenmedi', unverified: 'Doğrulanmadı' };
+  const fileEvents = events.filter(event => event.event === 'TASK_READ');
+  stage('files', fileLabels[data.file_audit?.status] || (active && fileEvents.length ? 'İşçi kaydı var' : pending), [
+    ...(data.file_audit ? [element('p', data.file_audit.summary)] : []),
+    ...trace('openat'),
+    ...fileEvents.map(event => element('p', `İşçi bildirimi · ${event.source} · ${results[event.result] || event.result}`))
+  ]);
+
+  const netLabels = { reachable: 'Bağlantı gözlemlendi', unreachable: 'Bağlantı başarısız', not_attempted: 'Denenmedi', unverified: 'Doğrulanmadı' };
+  const ping = receiver.some(entry => entry.kind === 'LAB_PING');
+  const networkBlocks = networkTraceBlocks(calls);
+  stage('network', netLabels[data.network_audit?.status] || (ping ? 'LAB-PING kabul edildi' : pending), [
+    ...(data.network_audit ? [element('p', data.network_audit.summary)] : []),
+    ...(networkBlocks.length ? networkBlocks : [element('p', active ? 'Çekirdek kaydı çalışma sonunda eklenir.' : 'İlgili sistem çağrısı kaydı yok.')])
+  ]);
+
+  const accepted = receiver.filter(entry => entry.kind === 'CONTENT');
+  const bytes = accepted.reduce((sum, entry) => sum + entry.accepted_bytes, 0);
+  const receiverLabel = accepted.length ? `${bytes} bayt kabul edildi`
+    : data.status === 'completed' ? 'İçerik kabul kaydı yok' : pending;
+  const receipts = receiver.map(entry => element('p', entry.kind === 'LAB_PING'
+    ? 'LAB-PING · Yerel alıcı kabul etti.'
+    : `${entry.source} · ${entry.accepted_bytes} bayt`));
+  stage('receiver', receiverLabel, receipts.length ? receipts : [element('p', receiverLabel)]);
+
+  if (data.run_id && !active) {
+    const report = find('[data-report]');
+    report.href = `/api/runs/${data.run_id}/report`;
+    report.hidden = false;
+  }
+}
+$('run-comparison-btn').onclick = () => runComparison(false);
+$('run-control-btn').onclick = () => runComparison(true);
+$('presentation-control').onclick = () => { view('comparison'); $('run-control-btn').focus(); };
+$('presentation-ad').onclick = () => { view('comparison'); $('run-comparison-btn').focus(); };
+$('presentation-isolation').onclick = () => { view('isolation'); $('run-isolation-btn').focus(); };
+
+async function refreshBenchmarkHistory(selected) {
+  const list = $('benchmark-history-list');
+  const status = $('benchmark-history-status');
+  try {
+    const { benchmarks } = await json('/api/benchmarks');
+    const previous = selected || list.value;
+    list.replaceChildren(element('option', benchmarks.length ? 'Kaydedilmiş bir seri seçin' : 'Henüz kayıtlı deney yok'));
+    list.firstElementChild.value = '';
+    for (const bundle of benchmarks) {
+      const state = bundle.state === 'partial' ? 'Eksik ölçüm' : 'Tamamlandı';
+      const label = `${benchmarkDate(bundle.saved_at)} · ${bundle.document.filename || 'Belge kaydı yok'} · ${state}`;
+      const option = element('option', label);
+      option.value = bundle.series_id;
+      list.append(option);
+    }
+    if (benchmarks.some(bundle => bundle.series_id === previous)) list.value = previous;
+    if (!openingBenchmark) status.hidden = true;
+    refreshButton();
+    return benchmarks;
+  } catch (err) {
+    status.textContent = `Kayıt listesi alınamadı. ${err.message}`;
+    status.hidden = false;
+  }
+}
+
+function benchmarkDate(timestamp) {
+  return new Date(timestamp * 1000).toLocaleString('tr-TR');
+}
+
+$('benchmark-history-list').onchange = refreshButton;
+$('benchmark-history-open').onclick = () => openSavedBenchmark($('benchmark-history-list').value);
+async function openSavedBenchmark(id) {
+  if (!id || benchmarkRunning || openingBenchmark) return;
+  openingBenchmark = true;
+  refreshButton();
+  const status = $('benchmark-history-status');
+  status.textContent = 'Kayıtlı gözlemler açılıyor…';
+  status.hidden = false;
+  try {
+    const bundle = await json(`/api/benchmarks/${id}`);
+    renderBenchmarkResults(bundle, true);
+    status.hidden = true;
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    openingBenchmark = false;
+    refreshButton();
+  }
+}
+
+$('presentation-benchmark').onclick = async () => {
+  view('benchmark');
+  const history = await refreshBenchmarkHistory();
+  if (!history) return;
+  if (!history.length) {
+    $('benchmark-history-status').textContent = 'Henüz kayıtlı deney yok. Önce bir karşılaştırmalı deney çalıştırın.';
+    $('benchmark-history-status').hidden = false;
+    return;
+  }
+  const latest = history[0].series_id;
+  $('benchmark-history-list').value = latest;
+  await openSavedBenchmark(latest);
+};
+
+
+async function saveBenchmark() {
+  const bundle = await json('/api/benchmarks', {
+    method: 'POST',
+    signal: AbortSignal.timeout(10000),
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(pendingBenchmark)
+  });
+  pendingBenchmark = null;
+  $('benchmark-save-retry').hidden = true;
+  renderBenchmarkResults(bundle, false);
+  await refreshBenchmarkHistory(bundle.series_id);
+}
+
+$('benchmark-save-retry').onclick = async () => {
+  if (!pendingBenchmark || benchmarkRunning) return;
+  benchmarkRunning = true;
+  refreshButton();
+  const status = $('benchmark-status-text');
+  status.textContent = 'Deney paketi kaydediliyor…';
+  try {
+    await saveBenchmark();
+  } catch (err) {
+    status.textContent = err.message;
   } finally {
     benchmarkRunning = false;
-    $('run-benchmark-btn').disabled = false;
+    refreshButton();
+  }
+};
+
+async function runBenchmark() {
+  if (runInProgress() || openingBenchmark) return;
+  benchmarkRunning = true;
+  refreshButton();
+  $('benchmark-progress').hidden = false;
+  $('benchmark-results').hidden = true;
+  $('benchmark-save-retry').hidden = true;
+  pendingBenchmark = null;
+
+  function progress(done, count, status) {
+    const percent = Math.round(done * 100 / count);
+    $('benchmark-pct').textContent = `%${percent}`;
+    $('benchmark-bar-fill').style.width = `${percent}%`;
+    $('benchmark-status-text').textContent = status;
+  }
+
+  try {
+    progress(0, 1, 'Deney koşulları kontrol ediliyor…');
+    health = await json('/api/health');
+    const profiles = health.profiles;
+    const repeats = health.benchmark_repetitions;
+    if (!health.converter || !profiles.every(profile => profile.available)) {
+      throw Error('Dört profilin karşılaştırılması için LibreOffice ve çalışan Linux bubblewrap ortamı gerekli.');
+    }
+    const installed = (await json('/api/plugins')).plugins;
+    if (!installed.some(plugin => plugin.id === 'hizlipdf.education' && plugin.installed)) {
+      throw Error('Önce eğitim eklentisini kurun.');
+    }
+
+    let sample = file;
+    if (!sample) {
+      const response = await fetch('/api/sample');
+      if (!response.ok) throw Error('Örnek belge alınamadı.');
+      sample = new File([await response.blob()], 'Musteri_Teklifi.docx');
+    }
+    const documentData = { filename: sample.name, content_base64: await base64File(sample) };
+    const total = profiles.length * (repeats + 1);
+    const seriesId = crypto.randomUUID().replaceAll('-', '');
+    const attempts = [];
+
+    // Round 0 warms each profile. Rotate the starting profile on each measured round.
+    for (let round = 0; round <= repeats; round++) {
+      for (let offset = 0; offset < profiles.length; offset++) {
+        const profile = profiles[(round + offset) % profiles.length];
+        const phase = round === 0 ? 'Isınma' : `Tur ${round}/${repeats}`;
+        progress(attempts.length, total, `${phase} · Profil ${profile.id}`);
+        let data;
+        try {
+          data = await runTrial(profile.id, documentData);
+        } catch (err) {
+          data = { error: err.message };
+        }
+        attempts.push({ profile: profile.id, round, run_id: data.run_id || null, error: data.error });
+      }
+    }
+    pendingBenchmark = { series_id: seriesId, attempts };
+    progress(total, total, 'Deney paketi kaydediliyor…');
+    await saveBenchmark();
+  } catch (err) {
+    $('benchmark-status-text').textContent = err.message;
+    $('benchmark-save-retry').hidden = !pendingBenchmark;
+  } finally {
+    benchmarkRunning = false;
+    refreshButton();
   }
 }
 
-function renderBenchmarkResults(profiles, results) {
-  const cols = $('benchmark-cols');
-  cols.replaceChildren();
+function measurementText(stats, unit) {
+  if (!stats) return 'Doğrulanmadı';
+  return `${stats.median} ${unit} · ${stats.min}–${stats.max} ${unit} · n=${stats.count}`;
+}
+function renderBenchmarkResults(bundle, saved) {
+  const { profiles, trials, summary, method } = bundle;
+  const repeats = method.repetitions_per_profile;
+  $('benchmark-progress').hidden = true;
+  $('benchmark-result-title').textContent = saved ? 'Kayıtlı deney' : 'Deney serisi kaydedildi';
+  const state = bundle.state === 'partial' ? 'Eksik ölçüm' : 'Tamamlandı';
+  $('benchmark-result-detail').textContent =
+    `${bundle.document.filename || 'Belge kaydı yok'} · ${benchmarkDate(bundle.saved_at)} · ${state}`;
+  $('benchmark-evidence').href = `/api/benchmarks/${bundle.series_id}/evidence`;
 
-  const scores = { A: 0, B: 50, C: 50, D: 100 };
-  const baselineMs = results.A?.total_ms || 1;
-  const maxBytes = Math.max(1, ...profiles.map(p => results[p.id]?.metrics?.accepted_bytes || 0));
-  const maxMs = Math.max(...profiles.map(p => results[p.id]?.total_ms || 1));
-
-  for (const p of profiles) {
-    const data = results[p.id] || {};
-    const bytes = data.metrics?.accepted_bytes ?? 0;
-    const reads = data.metrics?.read_sources_worker_reported ?? 0;
-    const ms = data.total_ms || 0;
-    const score = scores[p.id];
-    const diffMs = ms - baselineMs;
-    const diffPct = Math.round((diffMs / baselineMs) * 100);
-
-    const card = element('div', undefined, `benchmark-col-card ${p.color}`);
-    card.innerHTML = `
-      <div class="benchmark-col-header">
-        <span class="benchmark-col-badge">${p.name}</span>
-        <span class="benchmark-col-score score-${p.color}">%${score} Koruma</span>
-      </div>
-      <h3 class="benchmark-col-title">${p.desc}</h3>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">Sızan Veri:</span>
-        <strong class="benchmark-metric-value ${bytes > 0 ? 'text-danger' : 'text-success'}">${bytes} Bayt</strong>
-      </div>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">Dosya Erişimi:</span>
-        <span class="benchmark-metric-value">${reads > 0 ? reads + ' dosya (İhlal)' : '0 dosya (Engellendi)'}</span>
-      </div>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">İşlem Süresi:</span>
-        <strong class="benchmark-metric-value">${ms} ms</strong>
-      </div>
-      <div class="benchmark-metric-item">
-        <span class="benchmark-metric-label">Ek Gecikme (Overhead):</span>
-        <span class="benchmark-metric-value">${p.id === 'A' ? 'Referans (Taban)' : (diffMs >= 0 ? `+${diffMs} ms (+%${diffPct})` : `${diffMs} ms`)}</span>
-      </div>
-      <div class="benchmark-security-bar-track">
-        <div class="benchmark-security-bar-fill fill-${p.color}" style="width: ${score}%"></div>
-      </div>
-    `;
-    cols.append(card);
+  const cards = $('benchmark-cols');
+  cards.replaceChildren();
+  for (const profile of profiles) {
+    const attempts = trials[profile.id];
+    const data = summary[profile.id];
+    const card = element('section', undefined, 'benchmark-col-card');
+    card.append(element('span', `Profil ${profile.id}`, 'benchmark-col-badge'),
+      element('h3', profile.name, 'benchmark-col-title'));
+    const metrics = [
+      ['Geçerli PDF', `${data.valid_pdf}/${repeats}`],
+      ['Örnek PDF içerik kontrolleri', data.pdf_reference_checked
+        ? `${data.pdf_reference_passed}/${data.pdf_reference_checked} geçti` : 'Referans yok'],
+      ['Alıcının kabul ettiği içerik', measurementText(data.accepted, 'bayt')],
+      ['İki dosya için açma sonucu', `${data.files.opened} başarılı · ${data.files.unavailable} başarısız · ${data.files.unverified} doğrulanmadı`],
+      ['Yerel alıcıya bağlantı', `${data.network.reachable} erişildi · ${data.network.unreachable} başarısız · ${data.network.unverified} doğrulanmadı`],
+      ['Toplam süre', measurementText(data.total, 'ms')],
+      ['PDF dönüşümü (işçi)', measurementText(data.conversion, 'ms')],
+      ['Ek deney adımı (işçi)', measurementText(data.extra, 'ms')]
+    ];
+    for (const [label, value] of metrics) {
+      const row = element('div', undefined, 'benchmark-metric-item');
+      row.append(element('span', label, 'benchmark-metric-label'), element('strong', value, 'benchmark-metric-value'));
+      card.append(row);
+    }
+    const details = element('details');
+    details.append(element('summary', 'Çalışma kayıtları'));
+    const list = element('ul');
+    for (const {round, data} of attempts) {
+      const label = round ? `Tur ${round}` : 'Isınma';
+      const item = element('li');
+      const status = data.verdict?.label || 'Doğrulanmadı';
+      if (data.run_id) {
+        const link = element('a', label, 'text-link');
+        link.href = `/api/runs/${data.run_id}/report`;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        item.append(link, ` · ${status}`);
+      } else {
+        item.textContent = `${label} · ${status}`;
+      }
+      if (data.error) item.append(` · ${data.error}`);
+      list.append(item);
+    }
+    details.append(list);
+    card.append(details);
+    cards.append(card);
   }
 
-  const leakChart = $('chart-data-leak');
-  leakChart.replaceChildren();
-  for (const p of profiles) {
-    const bytes = results[p.id]?.metrics?.accepted_bytes || 0;
-    const pct = Math.round((bytes / maxBytes) * 100);
-    const row = element('div', undefined, 'chart-row');
-    row.innerHTML = `
-      <div class="chart-row-label">${p.name} (${p.desc})</div>
-      <div class="chart-row-track">
-        <div class="chart-row-fill ${bytes > 0 ? 'fill-danger' : 'fill-success'}" style="width: ${Math.max(4, pct)}%"></div>
-      </div>
-      <div class="chart-row-value ${bytes > 0 ? 'text-danger' : 'text-success'}">${bytes} B</div>
-    `;
-    leakChart.append(row);
-  }
-
-  const latencyChart = $('chart-latency');
-  latencyChart.replaceChildren();
-  for (const p of profiles) {
-    const ms = results[p.id]?.total_ms || 0;
-    const pct = Math.round((ms / maxMs) * 100);
-    const diffMs = ms - baselineMs;
-    const row = element('div', undefined, 'chart-row');
-    row.innerHTML = `
-      <div class="chart-row-label">${p.name} (${p.desc})</div>
-      <div class="chart-row-track">
-        <div class="chart-row-fill fill-latency" style="width: ${pct}%"></div>
-      </div>
-      <div class="chart-row-value">${ms} ms ${p.id !== 'A' && diffMs > 0 ? `<small>(+${diffMs}ms)</small>` : ''}</div>
-    `;
-    latencyChart.append(row);
-  }
-
-  const overheadMs = Math.max(0, (results.D?.total_ms || 0) - baselineMs);
-  const overheadPct = Math.round((overheadMs / baselineMs) * 100);
-  $('overhead-summary-text').innerHTML = `
-    Bubblewrap hafif konteynerizasyonunun sisteme getirdiği ek gecikme maliyeti yalnızca <strong>~${overheadMs} ms (+%${overheadPct})</strong> seviyesindedir. 
-    Buna karşılık veri sızıntısını <strong>%100 oranında (0 bayt)</strong> engellemektedir. 
-    Bu deneysel sonuç, üretim ortamlarında tam izolasyonun ihmal edilebilir bir performans maliyetiyle maksimum koruma sağladığını kanıtlar.
-  `;
-
+  renderBenchmarkChart($('chart-data-leak'), profiles, summary, 'accepted', 'B');
+  renderBenchmarkChart($('chart-latency'), profiles, summary, 'total', 'ms');
+  const a = summary.A.total, d = summary.D.total;
+  $('overhead-summary-text').textContent = a?.count === repeats && d?.count === repeats
+    ? `D ile A arasındaki toplam süre medyanı farkı ${d.median - a.median} ms. Toplam süre, dosya hazırlığı, dönüşüm, ek deney adımı ve çıktı kontrolünü kapsar.`
+    : `A ile D arasındaki medyan farkı için iki profilde de ${repeats} geçerli ölçüm gerekiyor.`;
   $('benchmark-results').hidden = false;
 }
-if ($('run-benchmark-btn')) $('run-benchmark-btn').onclick = runBenchmark;
+
+function renderBenchmarkChart(container, profiles, summary, key, unit) {
+  container.replaceChildren();
+  const max = Math.max(1, ...profiles.map(profile => summary[profile.id][key]?.median ?? 0));
+  for (const profile of profiles) {
+    const stats = summary[profile.id][key];
+    const row = element('div', undefined, 'chart-row');
+    row.append(element('div', `Profil ${profile.id}`, 'chart-row-label'));
+    const track = element('div', undefined, 'chart-row-track');
+    if (stats) {
+      const fill = element('div', undefined, 'chart-row-fill fill-latency');
+      fill.style.width = `${stats.median * 100 / max}%`;
+      track.append(fill);
+    }
+    row.append(track, element('div', stats ? `${stats.median} ${unit}` : 'Doğrulanmadı', 'chart-row-value'));
+    container.append(row);
+  }
+}
+$('run-benchmark-btn').onclick = runBenchmark;
 init();

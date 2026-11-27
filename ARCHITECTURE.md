@@ -56,19 +56,23 @@ Bu ilk sandbox, minimal Linux laboratuvarı için hazırlanmıştır. Sistem `/u
 - `POST /api/runs`: `{filename, content_base64, plugin_id, profile: A|B|C|D}`; yalnızca kurulu paketle `202 {run_id}` döner. Eski `plugin: normal|education` alanı da kurulum zorunluluğuyla desteklenir.
 - `GET /api/runs/<id>`: durum, işçi olayları, alıcı kayıtları, PDF ve metrikler.
 - `GET /api/runs/<id>/pdf`: tamamlanmış çıktıyı gösterir/indirir.
-- `GET /api/runs/<id>/evidence`: per-run gizli anahtar olmadan JSON kanıtı.
+- `GET /api/runs/<id>/evidence`: çalışma anahtarı çıkarılarak hazırlanan JSON kaydı.
+- `POST /api/benchmarks`: ısınma ve ölçüm turlarındaki çalışma kimliklerinden bir deney serisi kaydeder.
+- `GET /api/benchmarks`: aynı veri dizininden kayıtlı deneyleri listeler.
+- `GET /api/benchmarks/<id>`: kayıtlı serinin kanıtlarını ve ölçüm özetini açar.
+- `GET /api/benchmarks/<id>/evidence`: aynı seriyi tek JSON dosyası olarak indirir.
 
 Durumlar: `queued → running → completed|failed`. Aynı anda en fazla iki iş; işçi grubu için 75 saniye, motor için 60 saniye sınırı. İşçi süre aşımında süreç grubu sonlandırılır. Ek ağ hataları PDF dönüşümünden ayrı kaydedilir.
 
 ## Güven ve kanıt sınırı
 
-1. İşçi dosyayı okuduğunu bildirir. Bu aşamada bağımsız OS gözlemi yoktur.
+1. İşçi dosyayı okuduğunu bildirir. Linux çalışmasında varsa `strace` kaydı sabit sentetik dosyaların `openat()` sonucunu ayrıca gösterir.
 2. Alıcı çalışma anahtarını, kaynak adını ve içeriğin `fixtures.py` ile birebir eşleşmesini doğrular. Bir kaynak/çalışma için tek kayıt kabul eder.
-3. `LAB_PING`, içerikten bağımsız bağlantı kontrolüdür; içerik baytına dahil edilmez.
+3. `LAB_PING`, işçiden yerel alıcıya bağlantı kontrolüdür ve içerik baytına dahil edilmez. Sunucu, alıcıyı çalışma öncesinde ve sonrasında kendi ağ ad alanından kontrol eder.
 4. Uygulama PDF'yi yeniden açar; sayfa sayısı ve metin alıntısını üretir. Yapısal geçerlilik ile içerik eşitliği ayrı tutulur.
-5. Tarayıcıya gönderilen bütün değişken metinler `textContent` ile işlenir; yerel servis Host/Origin kontrolü yapar ve dış arayüzde dinlemez.
+5. Panel alıcı görünümünü ve sistem çağrılarını metin olarak işler. Yerel servis Host/Origin kontrolü yapar ve dış arayüzde dinlemez.
 
-Receiver, işçiden bağımsızdır fakat uygulama servisiyle aynı güven sınırındadır. Ayrı makine alıcısı ve bağımsız OS denetimi sonraki Linux/gözlem aşamalarının kapsamıdır. Kısıt yokken yapay olarak “engellendi” sonucu üretilmez. Çevresel hata ile güvenlik politikası aynı şey değildir.
+Alıcı uygulama servisiyle aynı güven sınırındadır. `strace` işçi sürecini izler ve kaydı işçinin yazabildiği çalışma dizinine bırakır. Deney bu kaydı sabit eğitim işçisiyle toplar. İşçi dışında korunan bir denetim kaydı sonraki aşamanın kapsamındadır. Eksik gözlemde sonuç “Doğrulanmadı” olur.
 
 ## Eklenti yükleme sınırı
 
