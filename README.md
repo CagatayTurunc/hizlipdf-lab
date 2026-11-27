@@ -94,7 +94,8 @@ Deney gözlemcisindeki **Adli Bilişim Raporu (.html / .pdf)** bağlantısı ça
 3. **Deney gözlemcisi** ekranında alıcı tarafı HTTP kaydını ve sistem çağrılarını inceleyin.
 4. Aynı dönüşümü Profil D'de çalıştırın. PDF durumunu, iki sentetik hedefe ilişkin dosya açma kayıtlarını ve yerel alıcıya bağlantı sonucunu karşılaştırın.
 5. **Canlı karşılaştırma** ekranında A ve D profillerini aynı örnek DOCX ve eğitim paketiyle çalıştırın. İki PDF’yi, örnek belge kontrollerini ve dört kanıt adımını yan yana inceleyin. `pdftoppm` kullanılamadığında ekranda PDF’den çıkarılan metin gösterilir. Ubuntu’da ilk sayfa görseli için `poppler-utils` kurulabilir.
-6. Tekrarlı ölçüm için **Karşılaştırma & Benchmark** sekmesini açın. Rapor bağlantıları her profilin çalışma kayıtlarında bulunur.
+6. **İzolasyon inceleyicisi** ekranında B ve C profillerini ayrı ayrı çalıştırın. İşçinin bağlama kaydını, iki ağ ad alanı kimliğini ve çalışmanın `openat()` sonuçlarını inceleyin.
+7. Tekrarlı ölçüm için **Karşılaştırma & Benchmark** sekmesini açın. Rapor bağlantıları her profilin çalışma kayıtlarında bulunur.
 
 ---
 

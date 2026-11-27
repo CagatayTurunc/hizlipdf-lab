@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 
 from fixtures import FILES
+from linux_isolation import read_network_namespace, read_target_mount
 from packages import read_package
 from analysis_docx import analyze_docx
 
@@ -40,6 +41,11 @@ def run(config):
 
     event("PROCESS_STARTED", "ok", uid=os.getuid() if hasattr(os, "getuid") else None,
           profile=config["profile"], sandbox=config["sandbox"])
+    if config["sandbox"]:
+        mount = read_target_mount()
+        network = read_network_namespace()
+        event("ISOLATION_OBSERVED", "ok" if mount is not None and network else "partial",
+              target_mount=mount, worker_network=network)
     try:
         plugin = read_package(Path(config["package_path"]).read_bytes())
         if plugin["manifest"]["id"] != config["plugin_id"] or plugin["sha256"] != config["package_sha256"]:

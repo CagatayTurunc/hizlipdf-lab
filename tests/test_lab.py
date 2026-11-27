@@ -11,6 +11,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixtures import FILES
+from linux_isolation import isolation_evidence, read_target_mount
 from sandbox import command
 from observations import assess, read_syscalls
 from server import Lab, check_sample_pdf, generate_forensic_html_report, make_hexdump, sample_docx, validate_docx
@@ -88,6 +89,31 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(assess({**record, "receiver_health": {"before": True}}, True)[1]["status"], "unverified")
         self.assertEqual(assess({**record, "receiver": [{"kind": "LAB_PING"}]}, True)[1]["status"], "reachable")
         self.assertEqual(assess(record, False)[2]["status"], "unverified")
+
+
+class IsolationObservationTests(unittest.TestCase):
+    def test_mountinfo_matches_only_the_exact_target(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "mountinfo"
+            self.assertIsNone(read_target_mount(path))
+            base = "30 22 0:15 / / rw - tmpfs tmpfs rw\n"
+            nested = "33 30 8:1 /fixture /lab/targets/nested ro - ext4 /dev/vda1 rw\n"
+            path.write_text(base + nested, encoding="utf-8")
+            self.assertEqual(read_target_mount(path), {"present": False, "id": None, "read_only": None})
+            path.write_text(base + "34 30 8:1 /fixture /lab/targets ro - ext4 /dev/vda1 rw\n",
+                            encoding="utf-8")
+            self.assertEqual(read_target_mount(path), {"present": True, "id": "34", "read_only": True})
+            path.write_text("", encoding="utf-8")
+            self.assertIsNone(read_target_mount(path))
+
+    def test_namespace_relation_requires_both_observed_identities(self):
+        receiver = {"id": "net:[321]", "device": 4}
+        self.assertEqual(isolation_evidence([], receiver)["network_relation"], "unverified")
+        worker = {"event": "ISOLATION_OBSERVED", "worker_network": receiver.copy()}
+        self.assertEqual(isolation_evidence([worker], None)["network_relation"], "unverified")
+        self.assertEqual(isolation_evidence([worker], receiver)["network_relation"], "shared")
+        other = {"id": "net:[321]", "device": 5}
+        self.assertEqual(isolation_evidence([worker], other)["network_relation"], "separate")
 
 
 class LabTests(unittest.TestCase):
@@ -223,6 +249,12 @@ class LabTests(unittest.TestCase):
                 self.assertEqual(result["metrics"]["read_sources_worker_reported"], reads)
                 self.assertEqual(result["metrics"]["accepted_sources"], accepted)
                 self.assertEqual(any(x["kind"] == "LAB_PING" for x in result["receiver"]), ping)
+                observation = result["isolation"]
+                self.assertEqual(observation["target_mount"]["present"], profile in ("A", "C"))
+                if observation["target_mount"]["present"]:
+                    self.assertTrue(observation["target_mount"]["read_only"])
+                self.assertEqual(observation["network_relation"],
+                                 "shared" if profile in ("A", "B") else "separate")
 
 
 if __name__ == "__main__":

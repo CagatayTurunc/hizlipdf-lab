@@ -10,6 +10,7 @@
     <button class="nav" id="plugins-tab"><span>◈</span> Eklentiler</button>
     <button class="nav" id="observer-tab"><span>◉</span> Deney gözlemcisi</button>
     <button class="nav" id="comparison-tab"><span>▥</span> Canlı karşılaştırma</button>
+    <button class="nav" id="isolation-tab"><span>⊞</span> İzolasyon inceleyicisi</button>
     <button class="nav" id="benchmark-tab"><span>📈</span> Karşılaştırma & Benchmark</button>
     <div class="sidebar-bottom"><span class="status-dot"></span> Yerel eğitim laboratuvarı<p>Yalnızca sentetik veriler.<br>Gerçek dönüşüm, görünür kanıt.</p></div>
   </aside>
@@ -106,6 +107,65 @@
           <a class="text-link" data-report target="_blank" rel="noopener" hidden>Çalışma raporunu aç ↗</a>
         </section>
       </template>
+    </section>
+    <section class="view" id="isolation-view" hidden>
+      <h1>Linux İzolasyon İnceleyicisi</h1>
+      <p class="intro">İşçinin gördüğü sentetik dosya bağlamasını ve yerel alıcıyla aynı ağ ad alanında olup olmadığını inceleyin.</p>
+      <section class="card isolation-controls">
+        <fieldset id="isolation-profiles">
+          <legend>Deney profili</legend>
+          <div class="isolation-options">
+            <label><input type="radio" name="isolation-profile" value="B" checked> <span><strong>B</strong> Dosya erişimi dar</span></label>
+            <label><input type="radio" name="isolation-profile" value="C"> <span><strong>C</strong> Ağ bağlantısı kapalı</span></label>
+          </div>
+        </fieldset>
+        <button class="primary" id="run-isolation-btn">Profili çalıştır <span aria-hidden="true">→</span></button>
+        <p id="isolation-status" role="status" hidden></p>
+      </section>
+
+      <div id="isolation-result" hidden>
+        <div class="isolation-result-head">
+          <h2 id="isolation-result-title"></h2>
+          <a id="isolation-pdf" class="text-link" target="_blank" rel="noopener" hidden>PDF’yi aç ↗</a>
+          <a id="isolation-evidence" class="text-link" target="_blank" rel="noopener" hidden>Kanıt JSON’unu indir ↗</a>
+        </div>
+        <div class="isolation-facts">
+          <section class="card">
+            <h2>Dosya sistemi</h2>
+            <code class="isolation-path">/lab/targets</code>
+            <strong id="isolation-mount-state" class="isolation-value"></strong>
+            <p class="small-note" id="isolation-mount-detail"></p>
+            <p class="isolation-source">Kaynak · İşçinin <code>/proc/self/mountinfo</code> kaydı</p>
+          </section>
+          <section class="card">
+            <h2>Ağ ad alanı</h2>
+            <dl class="isolation-ids">
+              <div><dt>İşçi</dt><dd><code id="isolation-worker-net"></code></dd></div>
+              <div><dt>Yerel alıcı</dt><dd><code id="isolation-receiver-net"></code></dd></div>
+            </dl>
+            <strong id="isolation-net-state" class="isolation-value"></strong>
+            <p class="isolation-source">Kaynak · Her iki süreç için <code>/proc/self/ns/net</code></p>
+          </section>
+        </div>
+        <div class="isolation-facts">
+          <section class="card">
+            <h2>Sentetik dosyalara <code>openat()</code> çağrıları</h2>
+            <div id="isolation-file-calls"></div>
+          </section>
+          <section class="card">
+            <h2>Yerel alıcı gözlemi</h2>
+            <p id="isolation-network-audit"></p>
+            <pre id="isolation-network-calls" class="comparison-trace" hidden></pre>
+          </section>
+        </div>
+      </div>
+      <details class="card isolation-glossary">
+        <summary>Linux hata kodlarını okuyun</summary>
+        <dl>
+          <dt><code>ENOENT</code></dt><dd>İşçinin gördüğü dosya sisteminde yol çözülemedi.</dd>
+          <dt><code>EACCES</code></dt><dd>Dosya veya yol bileşenlerinden biri için erişim izni reddedildi.</dd>
+        </dl>
+      </details>
     </section>
     <section class="view" id="benchmark-view" hidden>
       <div class="eyebrow">AKADEMİK DEĞERLENDİRME & BENCHMARK</div>

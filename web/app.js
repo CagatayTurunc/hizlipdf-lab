@@ -1,13 +1,13 @@
 const $ = (id) => document.getElementById(id);
 let file = null, health = null, currentRun = null, busy = false, plugins = [], pluginBusy = false;
-let benchmarkRunning = false, comparisonRunning = false;
+let benchmarkRunning = false, comparisonRunning = false, isolationRunning = false;
 const syscallLabels = { allowed: 'BAŞARILI', error: 'HATA', pending: 'BAĞLANTI BEKLEMEDE' };
-const names = {PROCESS_STARTED:'İşçi başladı',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Yerel bağlantı testi',LAB_PROBE_FINISHED:'Ek deney adımı tamamlandı',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
-const results = {ok:'Başarılı (işçi)',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
+const names = {PROCESS_STARTED:'İşçi başladı',ISOLATION_OBSERVED:'Linux ad alanı gözlemi',CONVERSION_STARTED:'Dönüşüm başladı',CONVERSION_FINISHED:'Dönüşüm tamamlandı',LAB_PING:'Yerel bağlantı testi',LAB_PROBE_FINISHED:'Ek deney adımı tamamlandı',TASK_READ_ATTEMPT:'Görev dışı okuma denemesi',TASK_READ:'Görev dışı okuma',CONTENT:'İçerik aktarım denemesi',EXTRA_ACTIONS:'Ek davranışlar'};
+const results = {ok:'Başarılı (işçi)',partial:'Bazı kayıtlar alınamadı',running:'Denendi',failed:'Başarısız / hata kaydı',acknowledged:'Alıcı onayı bildirildi',not_attempted:'Denenmedi',rejected_content:'Sentetik içerik doğrulaması reddetti'};
 
 Object.assign(names,{PLUGIN_LOADED:'Kurulu paket yüklendi',PLUGIN_FAILED:'Paket yüklenemedi',ANALYSIS_FINISHED:'Belge analiz edildi'});
 function view(name) {
-  for (const key of ['user','plugins','observer','comparison','benchmark']) {
+  for (const key of ['user','plugins','observer','comparison','isolation','benchmark']) {
     const el = $(key+'-view'), tab = $(key+'-tab');
     if (el) el.hidden = key !== name;
     if (tab) tab.classList.toggle('active', key === name);
@@ -18,11 +18,13 @@ $('plugins-tab').onclick = $('manage-plugins').onclick = () => view('plugins');
 $('observer-tab').onclick = $('reveal-button').onclick = () => view('observer');
 $('benchmark-tab').onclick = () => view('benchmark');
 $('comparison-tab').onclick = () => view('comparison');
+$('isolation-tab').onclick = () => view('isolation');
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
+function runInProgress() { return busy || benchmarkRunning || comparisonRunning || isolationRunning; }
 function refreshButton() {
-  const active = busy || benchmarkRunning || comparisonRunning;
+  const active = runInProgress();
   $('convert-button').disabled = active || !file || !health?.converter || !$('plugin').value;
-  $('run-comparison-btn').disabled = $('run-benchmark-btn').disabled = active;
+  $('run-comparison-btn').disabled = $('run-benchmark-btn').disabled = $('run-isolation-btn').disabled = active;
 }
 $('plugin').onchange = refreshButton;
 function selectFile(next) {
@@ -62,7 +64,7 @@ async function init() {
 }
 function base64File(selected) { return new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = () => reject(Error('Dosya okunamadı.')); reader.readAsDataURL(selected); }); }
 $('convert-button').onclick = async () => {
-  if (busy || benchmarkRunning || comparisonRunning || !file) return;
+  if (runInProgress() || !file) return;
   busy = true; refreshButton(); error(''); document.body.classList.add('busy');
   $('sample-button').disabled = $('plugin').disabled = $('profile').disabled = $('file-input').disabled = true;
   $('output-empty').hidden = false; $('output-ready').hidden = true; $('pdf-preview').removeAttribute('src');
@@ -262,8 +264,118 @@ async function educationTrial(profile, documentData, onUpdate) {
   }
 }
 
+const isolationRuns = new Map();
+const openErrors = {
+  ENOENT: 'Yol işçinin dosya görünümünde bulunamadı.',
+  EACCES: 'Dosya veya yol bileşenlerinden biri için erişim izni reddedildi.',
+  EPERM: 'İşleme izin verilmedi.'
+};
+
+function renderIsolation(profile, data) {
+  $('isolation-result').hidden = !data;
+  if (!data) return;
+  const active = ['queued', 'running'].includes(data.status);
+  const missing = active ? 'Kayıt bekleniyor' : 'Doğrulanmadı';
+  const observation = data.isolation;
+  const mount = observation?.target_mount;
+  let mountState = missing;
+  let mountDetail = '';
+  if (mount?.present === false) {
+    mountState = 'Hedefler bağlanmamış';
+    mountDetail = 'İşçinin bağlama tablosunda /lab/targets için ayrı bir kayıt yok.';
+  } else if (mount?.present) {
+    mountState = 'Bağlama mevcut';
+    const mode = mount.read_only === true ? 'Salt okunur (ro)'
+      : mount.read_only === false ? 'Okunur-yazılır (rw)' : 'Bağlama kipi doğrulanmadı';
+    mountDetail = mount.id ? `${mode} · Bağlama kimliği ${mount.id}` : mode;
+  }
+  $('isolation-mount-state').textContent = mountState;
+  $('isolation-mount-detail').textContent = mountDetail;
+  $('isolation-worker-net').textContent = observation?.worker_network?.id || '—';
+  $('isolation-receiver-net').textContent = observation?.receiver_network?.id || '—';
+  const relations = {shared: 'Aynı ağ ad alanı', separate: 'Ayrı ağ ad alanları'};
+  $('isolation-net-state').textContent = relations[observation?.network_relation] || missing;
+
+  const states = {queued: 'Sırada', running: 'Çalışıyor', completed: 'Tamamlandı', failed: 'Başarısız'};
+  $('isolation-result-title').textContent = `Profil ${profile} · ${states[data.status] || 'Doğrulanmadı'}`;
+  const pdf = $('isolation-pdf');
+  pdf.hidden = !(data.status === 'completed' && data.pdf?.structurally_valid);
+  if (!pdf.hidden) pdf.href = data.pdf.url;
+  const evidence = $('isolation-evidence');
+  evidence.hidden = active || !data.run_id;
+  if (!evidence.hidden) evidence.href = `/api/runs/${data.run_id}/evidence`;
+
+  const calls = data.syscalls || [];
+  const openCalls = calls.filter(call => call.kind === 'openat');
+  const container = $('isolation-file-calls');
+  container.replaceChildren();
+  if (!openCalls.length) {
+    container.append(element('p', active ? missing : 'İlgili openat() kaydı bulunamadı. Sonuç doğrulanmadı.'));
+  }
+  for (const call of openCalls) {
+    const title = call.errno ? `${call.source} · ${call.errno}` : call.source;
+    container.append(element('strong', title), element('pre', call.raw, 'comparison-trace'));
+    if (openErrors[call.errno]) container.append(element('p', openErrors[call.errno]));
+  }
+
+  const ping = (data.receiver || []).some(entry => entry.kind === 'LAB_PING');
+  const summary = data.network_audit?.summary || (active ? 'Bağlantı kaydı bekleniyor.' : 'Bağlantı sonucu doğrulanmadı.');
+  $('isolation-network-audit').textContent = ping ? 'Yerel alıcı LAB-PING kaydını kabul etti.' : summary;
+  const networkCalls = calls.filter(call => call.kind === 'connect');
+  const networkTrace = $('isolation-network-calls');
+  networkTrace.hidden = !networkCalls.length;
+  networkTrace.textContent = networkCalls.map(call => call.raw).join('\n');
+}
+
+$('isolation-profiles').onchange = (event) => {
+  $('isolation-status').hidden = true;
+  renderIsolation(event.target.value, isolationRuns.get(event.target.value));
+};
+
+$('run-isolation-btn').onclick = async () => {
+  if (runInProgress()) return;
+  const radio = $('isolation-profiles').querySelector('input:checked');
+  const profile = radio.value;
+  const status = $('isolation-status');
+  isolationRunning = true;
+  $('isolation-profiles').disabled = true;
+  refreshButton();
+  status.textContent = 'Linux ortamı ve eğitim eklentisi kontrol ediliyor…';
+  status.hidden = false;
+  try {
+    const [environment, catalog] = await Promise.all([json('/api/health'), json('/api/plugins')]);
+    if (!environment.converter || !environment.profiles.some(entry => entry.id === profile && entry.available)) {
+      throw Error('Bu profil için çalışan Linux Bubblewrap ortamı ve LibreOffice gerekli.');
+    }
+    if (!catalog.plugins.some(plugin => plugin.id === 'hizlipdf.education' && plugin.installed)) {
+      throw Error('Eklentiler ekranından eğitim paketini kurun.');
+    }
+    status.hidden = true;
+    renderIsolation(profile, {status: 'queued'});
+    let run;
+    try {
+      run = await educationTrial(profile, {sample: true}, data => renderIsolation(profile, data));
+    } catch (err) {
+      run = {status: 'unknown', error: err.message};
+    }
+    isolationRuns.set(profile, run);
+    renderIsolation(profile, run);
+    if (run.error) {
+      status.textContent = run.error;
+      status.hidden = false;
+    }
+  } catch (err) {
+    status.textContent = err.message;
+    status.hidden = false;
+  } finally {
+    isolationRunning = false;
+    $('isolation-profiles').disabled = false;
+    refreshButton();
+  }
+};
+
 async function runComparison() {
-  if (comparisonRunning || benchmarkRunning || busy) return;
+  if (runInProgress()) return;
   comparisonRunning = true;
   refreshButton();
   const status = $('comparison-status');
@@ -431,7 +543,7 @@ function renderComparisonRun(card, data) {
 $('run-comparison-btn').onclick = runComparison;
 
 async function runBenchmark() {
-  if (benchmarkRunning || comparisonRunning || busy) return;
+  if (runInProgress()) return;
   benchmarkRunning = true;
   refreshButton();
   $('benchmark-progress').hidden = false;

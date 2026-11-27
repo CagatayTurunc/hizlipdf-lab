@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from docx import Document
 from pypdf import PdfReader
 from fixtures import FILES
+from linux_isolation import isolation_evidence, read_network_namespace
 from observations import assess, mitre_mapping, read_syscalls
 from sandbox import PROFILES, capability, command
 from packages import PluginStore, build_package
@@ -626,6 +627,7 @@ class Lab:
         self.lock = threading.RLock()
         self.slots = threading.BoundedSemaphore(2)
         self.sandbox = capability()
+        self.receiver_network = read_network_namespace() if self.sandbox["available"] else None
         self.soffice = soffice or os.environ.get("HIZLIPDF_SOFFICE") or shutil.which("soffice") or shutil.which("libreoffice")
         self.receiver = ThreadingHTTPServer(("127.0.0.1", 0), self.receiver_handler())
         self.receiver.daemon_threads = True
@@ -745,6 +747,7 @@ class Lab:
                   "status": "queued", "token": secrets.token_hex(24), "receiver": [], "events": [],
                   "started_at": time.time(), "sandbox_requested": self.sandbox["available"],
                   "sandbox_applied": False,
+                  "isolation": isolation_evidence([], self.receiver_network) if self.sandbox["available"] else None,
                   "independent_file_observer": False, "pdf": None, "analysis": None,
                   "syscalls": [], "mitre_matrix": [], "file_audit": None, "network_audit": None, "verdict": None,
                   "plugin_manifest": info["manifest"], "package_sha256": info["sha256"],
@@ -775,6 +778,8 @@ class Lab:
             snapshot = json.loads(json.dumps({k: v for k, v in record.items() if k != "token"}))
         if snapshot["status"] == "running":
             snapshot["events"] = read_worker_events(self.data / run_id / "worker-events.jsonl")
+            if snapshot.get("sandbox_requested"):
+                snapshot["isolation"] = isolation_evidence(snapshot["events"], self.receiver_network)
         return snapshot
 
     def render_sample_preview(self, pdf_path):
@@ -867,6 +872,8 @@ class Lab:
             events = read_worker_events(event_path)
             with self.lock:
                 record["events"] = events
+                if sandboxed:
+                    record["isolation"] = isolation_evidence(events, self.receiver_network)
                 record["sandbox_applied"] = sandboxed and any(
                     event.get("event") == "PROCESS_STARTED" and event.get("sandbox") is True for event in events
                 )
